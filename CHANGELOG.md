@@ -3,7 +3,7 @@
 Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may carry breaking changes; pin an exact version.
 
-## Unreleased
+## 0.3.0 - 2026-08-24
 
 - Additive bound-mint receipt parsing and validation for sealed signers:
   `InvoiceResult.mint`, `VerifyResult.mint`, `requireBoundMintQuote` and
