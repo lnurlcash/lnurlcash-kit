@@ -25,17 +25,31 @@ import {hashK1} from './secrets.js'
 const LIGHTNING_SIGNED_MESSAGE_PREFIX = utf8ToBytes('Lightning Signed Message:')
 
 export const noteSignatureMessage = (k1: string, amountMsat: number): string =>
-  `LNURLcash:${amountMsat}:${hashK1(k1)}`
+  noteSignatureMessageForHash(hashK1(k1), amountMsat)
+
+// The same message when the caller already has the note id rather than its
+// secret. A bound mint quote deliberately discloses h, not k1, so its
+// settlement receipt must be verifiable without asking a sealed signer to
+// export the secret it just generated.
+export const noteSignatureMessageForHash = (
+  h: string,
+  amountMsat: number
+): string => `LNURLcash:${amountMsat}:${h.trim().toLowerCase()}`
 
 export const noteSignatureDigest = (
   k1: string,
+  amountMsat: number
+): Uint8Array => noteSignatureDigestForHash(hashK1(k1), amountMsat)
+
+export const noteSignatureDigestForHash = (
+  h: string,
   amountMsat: number
 ): Uint8Array =>
   sha256(
     sha256(
       new Uint8Array([
         ...LIGHTNING_SIGNED_MESSAGE_PREFIX,
-        ...utf8ToBytes(noteSignatureMessage(k1, amountMsat))
+        ...utf8ToBytes(noteSignatureMessageForHash(h, amountMsat))
       ])
     )
   )
@@ -77,6 +91,21 @@ export const verifyNoteSignatureAgainst = (
   signatureHex: string,
   mintPubkeys: string | string[]
 ): SignatureCheck => {
+  let h: string
+  try {
+    h = hashK1(k1)
+  } catch {
+    return NO_MATCH
+  }
+  return verifyNoteSignatureHashAgainst(h, amountMsat, signatureHex, mintPubkeys)
+}
+
+export const verifyNoteSignatureHashAgainst = (
+  h: string,
+  amountMsat: number,
+  signatureHex: string,
+  mintPubkeys: string | string[]
+): SignatureCheck => {
   const targets = (Array.isArray(mintPubkeys) ? mintPubkeys : [mintPubkeys])
     .filter(key => typeof key === 'string')
     .map(key => key.trim().toLowerCase())
@@ -94,7 +123,8 @@ export const verifyNoteSignatureAgainst = (
   // signature is a "no", never a crash
   let digest: Uint8Array
   try {
-    digest = noteSignatureDigest(k1, amountMsat)
+    if (!/^[0-9a-fA-F]{64}$/.test(h.trim())) return NO_MATCH
+    digest = noteSignatureDigestForHash(h, amountMsat)
   } catch {
     return NO_MATCH
   }
@@ -132,3 +162,11 @@ export const verifyNoteSignature = (
   signatureHex: string,
   mintPubkeys: string | string[]
 ): boolean => verifyNoteSignatureAgainst(k1, amountMsat, signatureHex, mintPubkeys).valid
+
+export const verifyNoteSignatureHash = (
+  h: string,
+  amountMsat: number,
+  signatureHex: string,
+  mintPubkeys: string | string[]
+): boolean =>
+  verifyNoteSignatureHashAgainst(h, amountMsat, signatureHex, mintPubkeys).valid

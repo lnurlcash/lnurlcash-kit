@@ -91,8 +91,12 @@ export {
 export {
   verifyNoteSignature,
   verifyNoteSignatureAgainst,
+  verifyNoteSignatureHash,
+  verifyNoteSignatureHashAgainst,
   noteSignatureMessage,
+  noteSignatureMessageForHash,
   noteSignatureDigest,
+  noteSignatureDigestForHash,
   type SignatureCheck
 } from './signature.js'
 
@@ -146,6 +150,8 @@ export {
   fetchPayRequest,
   requestInvoice,
   fetchInvoiceVerification,
+  requireBoundMintQuote,
+  validateBoundMintReceipt,
   claimMintedNote,
   type WithdrawRequestInfo,
   type MintAddressInfo,
@@ -160,6 +166,8 @@ export {
   type PayRequestInfo,
   type InvoiceResult,
   type InvoiceRequestOptions,
+  type BoundMintCommitment,
+  type ValidatedBoundMintReceipt,
   type MintClaim,
   type VerifyResult
 } from './client.js'

@@ -22,9 +22,11 @@ import {
   mergeNotes,
   mergeNotesWithHash,
   requestInvoice,
+  requireBoundMintQuote,
   rotateNoteWithHash,
   splitNote,
-  splitNoteWithHash
+  splitNoteWithHash,
+  validateBoundMintReceipt
 } from '../src/index.js'
 
 const require = createRequire(import.meta.url)
@@ -96,6 +98,96 @@ describe('callback request vectors', () => {
       splitNote('https://mint.example/w/cb', [], 1000, opts)
     ).rejects.toBeInstanceOf(RequestRefusedError)
     expect(seen).toHaveLength(0)
+  })
+})
+
+describe('bound mint settlement receipts', () => {
+  const signatures = load('signature.json')
+  const signed = signatures.cases.find((c: any) => c.valid && c.amountMsat === 21000)
+  const pr = 'lnbc210n1pjqrstuvwxyz'
+
+  it('maps the additive wire fields and validates the settled receipt', async () => {
+    const quote = await requestInvoice('https://mint.example/p/cb', 21000, {
+      h: signed.noteId,
+      fetch: jsonFetch({
+        pr,
+        verify: 'https://mint.example/verify/ab',
+        mintToHash: true,
+        mint: {h: signed.noteId.toUpperCase(), amount: 21000}
+      })
+    })
+    expect(requireBoundMintQuote(quote, signed.noteId, 21000)).toEqual({
+      h: signed.noteId,
+      amountMsat: 21000
+    })
+
+    const verification = await fetchInvoiceVerification('https://mint.example/verify/ab', {
+      fetch: jsonFetch({
+        status: 'OK',
+        settled: true,
+        preimage: '06'.repeat(32),
+        pr,
+        mint: {h: signed.noteId, amount: 21000, sig: signed.signature}
+      })
+    })
+    expect(
+      validateBoundMintReceipt(quote, verification, signed.noteId, 21000, signed.mintPubkey)
+    ).toEqual({
+      h: signed.noteId,
+      amountMsat: 21000,
+      signature: signed.signature,
+      pubkey: signed.mintPubkey
+    })
+  })
+
+  it('refuses a receipt that changes the quote commitment', async () => {
+    const quote = await requestInvoice('https://mint.example/p/cb', 21000, {
+      h: signed.noteId,
+      fetch: jsonFetch({
+        pr,
+        verify: 'https://mint.example/verify/ab',
+        mintToHash: true,
+        mint: {h: signed.noteId, amount: 21000}
+      })
+    })
+    const verification = await fetchInvoiceVerification('https://mint.example/verify/ab', {
+      fetch: jsonFetch({
+        settled: true,
+        preimage: '06'.repeat(32),
+        pr,
+        mint: {h: signed.noteId, amount: 20999, sig: signed.signature}
+      })
+    })
+    expect(() =>
+      validateBoundMintReceipt(quote, verification, signed.noteId, 21000, signed.mintPubkey)
+    ).toThrow(ProtocolError)
+  })
+
+  it('refuses a quote for a different net amount before payment', async () => {
+    const quote = await requestInvoice('https://mint.example/p/cb', 21000, {
+      h: signed.noteId,
+      fetch: jsonFetch({
+        pr,
+        verify: 'https://mint.example/verify/ab',
+        mintToHash: true,
+        mint: {h: signed.noteId, amount: 20999}
+      })
+    })
+    expect(() => requireBoundMintQuote(quote, signed.noteId, 21000)).toThrow(
+      'different mint amount'
+    )
+  })
+
+  it('refuses a pre-settlement signature on the quote', async () => {
+    const quote = await requestInvoice('https://mint.example/p/cb', 21000, {
+      h: signed.noteId,
+      fetch: jsonFetch({
+        pr,
+        mintToHash: true,
+        mint: {h: signed.noteId, amount: 21000, sig: signed.signature}
+      })
+    })
+    expect(() => requireBoundMintQuote(quote, signed.noteId, 21000)).toThrow(ProtocolError)
   })
 })
 

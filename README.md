@@ -358,6 +358,47 @@ is yours from the moment it exists. The claim GET does show the secret to the
 mint it is a claim on, which is a different thing from showing it to whoever
 scanned the QR, and you can still rotate if you want the offline signature.
 
+### A sealed signer: confirm without exporting the secret
+
+A hardware vault cannot use the claim GET above without handing `k1` to its
+companion. A receipt-capable mint can instead commit the quote to the requested
+`h` and exact net amount, then place the ordinary LUD-25 note signature on its
+settled LUD-21 response. The extension is optional; absence means use the
+unchanged preimage-import-and-rotate flow before showing an invoice.
+
+```ts
+import {
+  requestInvoice, fetchInvoiceVerification,
+  requireBoundMintQuote, validateBoundMintReceipt
+} from 'lnurlcash-kit'
+
+const staged = await vault.newSecret() // {id, h}; k1 stays in the vault
+const expectedNetMsat = 21_000
+const quote = await requestInvoice(pay.callback, 21_000, {h: staged.h})
+
+// Do this before displaying or paying quote.pr.
+requireBoundMintQuote(quote, staged.h, expectedNetMsat)
+if (!quote.verify) throw new Error('No settlement receipt offered')
+
+// After payment, poll quote.verify until settled.
+const verification = await fetchInvoiceVerification(quote.verify)
+const receipt = validateBoundMintReceipt(
+  quote,
+  verification,
+  staged.h,
+  expectedNetMsat,
+  pinnedMintPubkeys
+)
+await vault.confirm(staged.id, receipt.amountMsat, mintHost, receipt.signature)
+```
+
+`quote.mint` is `{h, amountMsat}` in the typed API (`amount` on the wire).
+The settled response must repeat that commitment and add `signature` (`sig`
+on the wire). Validation matches the invoice, output and amount, refuses a
+pre-settlement signature, and recovers the signer against the pinned current
+or previous mint keys. The payment preimage remains proof of payment; it never
+replaces the vault's staged secret.
+
 ## Asking to be paid
 
 "Send me 500 sat" today means handing over a Lightning Address, which is a

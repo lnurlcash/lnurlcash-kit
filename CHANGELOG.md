@@ -3,6 +3,18 @@
 Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may carry breaking changes; pin an exact version.
 
+## Unreleased
+
+- Additive bound-mint receipt parsing and validation for sealed signers:
+  `InvoiceResult.mint`, `VerifyResult.mint`, `requireBoundMintQuote` and
+  `validateBoundMintReceipt`. The quote must commit the requested `h` and
+  exact net amount before payment; the settled LUD-21 response must match the
+  invoice and commitment and carry a valid ordinary LUD-25 note signature.
+- `noteSignatureMessageForHash`, `noteSignatureDigestForHash`,
+  `verifyNoteSignatureHash` and `verifyNoteSignatureHashAgainst` expose the
+  existing signature construction when a signer deliberately retains `k1`.
+  Existing secret-based helpers delegate to them unchanged.
+
 ## 0.2.1 - 2026-08-22
 
 - `WithdrawRequestInfo` carries `payLink`, the way home a SERVICE may

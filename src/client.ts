@@ -12,8 +12,9 @@ import {
 import {lnurlFetch, resolveOptions, type LnurlcashOptions} from './transport.js'
 import {hashK1, isPreimage} from './secrets.js'
 import {buildNoteUrl, noteK1, withNewK1} from './note.js'
-import {decodeBolt11AmountMsat} from './bolt11.js'
+import {decodeBolt11AmountMsat, sameInvoice} from './bolt11.js'
 import {parseMintFee, type MintFee} from './fees.js'
+import {verifyNoteSignatureHashAgainst} from './signature.js'
 
 // ---- the informational GET ----
 
@@ -709,6 +710,40 @@ export type InvoiceResult = {
   // parameter without echoing it back here. So treat this as a
   // confirmation when it arrives, and claim by probing either way.
   mintToHash: boolean
+  // Optional receipt commitment. Its presence means a sealed signer can
+  // require authenticated LUD-21 settlement without exporting k1. `amount`
+  // on the wire is mapped to an explicitly-denominated property here.
+  mint?: BoundMintCommitment
+}
+
+export type BoundMintCommitment = {
+  h: string
+  amountMsat: number
+  signature?: string
+}
+
+export type ValidatedBoundMintReceipt = Required<BoundMintCommitment> & {
+  pubkey: string
+}
+
+const asBoundMintCommitment = (value: unknown): BoundMintCommitment | undefined => {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+  if (
+    typeof raw.h !== 'string' ||
+    !/^[0-9a-fA-F]{64}$/.test(raw.h) ||
+    typeof raw.amount !== 'number' ||
+    !Number.isSafeInteger(raw.amount) ||
+    raw.amount <= 0 ||
+    (raw.sig !== undefined && typeof raw.sig !== 'string')
+  ) {
+    return undefined
+  }
+  return {
+    h: raw.h.toLowerCase(),
+    amountMsat: raw.amount,
+    ...(typeof raw.sig === 'string' ? {signature: raw.sig} : {})
+  }
 }
 
 export type InvoiceRequestOptions = LnurlcashOptions & {
@@ -777,7 +812,8 @@ export const requestInvoice = async (
     pr: body.pr,
     verify: typeof body.verify === 'string' ? body.verify : undefined,
     disposable: body.disposable !== false,
-    mintToHash: body.mintToHash === true
+    mintToHash: body.mintToHash === true,
+    mint: asBoundMintCommitment(body.mint)
   }
 }
 
@@ -785,6 +821,7 @@ export type VerifyResult = {
   settled: boolean
   preimage: string | null
   pr: string
+  mint?: BoundMintCommitment
 }
 
 // LUD-21: polls whether an invoice has settled, via the URL requestInvoice
@@ -814,8 +851,73 @@ export const fetchInvoiceVerification = async (
   return {
     settled: body.settled,
     preimage: typeof body.preimage === 'string' ? body.preimage : null,
-    pr: body.pr
+    pr: body.pr,
+    mint: asBoundMintCommitment(body.mint)
   }
+}
+
+// Refuse a bound invoice before it is shown or paid unless the SERVICE has
+// committed this exact quote to the output the WALLET named. A signature at
+// this stage is invalid: the value has not settled and does not yet exist.
+export const requireBoundMintQuote = (
+  invoice: InvoiceResult,
+  expectedH: string,
+  expectedAmountMsat: number
+): BoundMintCommitment => {
+  const h = expectedH.trim().toLowerCase()
+  if (!isPreimage(h)) throw new ProtocolError('The expected mint output hash is malformed.')
+  if (!Number.isSafeInteger(expectedAmountMsat) || expectedAmountMsat <= 0) {
+    throw new ProtocolError('The expected mint amount must be positive integer millisatoshis.')
+  }
+  if (!invoice.mintToHash || !invoice.mint) {
+    throw new ProtocolError('The service did not commit this quote to a bound mint output.')
+  }
+  if (invoice.mint.h !== h) {
+    throw new ProtocolError('The service committed the quote to a different mint output.')
+  }
+  if (invoice.mint.amountMsat !== expectedAmountMsat) {
+    throw new ProtocolError('The service committed the quote to a different mint amount.')
+  }
+  if (invoice.mint.signature !== undefined) {
+    throw new ProtocolError('The service signed a mint output before the invoice settled.')
+  }
+  return invoice.mint
+}
+
+// Match the settled LUD-21 response to the exact pre-payment commitment and
+// verify the ordinary LUD-25 signature over h and the net note amount. The
+// payment preimage remains payment proof only; it is intentionally ignored.
+export const validateBoundMintReceipt = (
+  invoice: InvoiceResult,
+  verification: VerifyResult,
+  expectedH: string,
+  expectedAmountMsat: number,
+  mintPubkeys: string | string[]
+): ValidatedBoundMintReceipt => {
+  const quote = requireBoundMintQuote(invoice, expectedH, expectedAmountMsat)
+  if (!verification.settled) {
+    throw new ProtocolError('The invoice has not settled.')
+  }
+  if (!sameInvoice(invoice.pr, verification.pr)) {
+    throw new ProtocolError('The settlement receipt names a different invoice.')
+  }
+  const receipt = verification.mint
+  if (!receipt || receipt.h !== quote.h || receipt.amountMsat !== quote.amountMsat) {
+    throw new ProtocolError('The settlement receipt does not match the mint quote.')
+  }
+  if (!receipt.signature) {
+    throw new ProtocolError('The settled mint receipt has no note signature.')
+  }
+  const checked = verifyNoteSignatureHashAgainst(
+    receipt.h,
+    receipt.amountMsat,
+    receipt.signature,
+    mintPubkeys
+  )
+  if (!checked.valid) {
+    throw new ProtocolError('The settled mint receipt has an invalid note signature.')
+  }
+  return {...receipt, signature: receipt.signature, pubkey: checked.pubkey}
 }
 
 // ---- claiming a note you named yourself ----
