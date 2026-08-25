@@ -717,6 +717,12 @@ export type PayRequestInfo = {
   // that only advertises there. Undefined means the SERVICE said nothing,
   // which is the same as no. See requestInvoice.
   mintToHash?: boolean
+  // LUD-12's own field, and the spelling LUD-25 uses to advertise the same
+  // capability: the output hash rides in a `comment`, so a mint that takes
+  // one needs to allow at least the 64 characters a hex-encoded 32-byte
+  // hash costs. A SERVICE advertising either this (>= 64) or `mintToHash`
+  // will name the note; one advertising neither keys it by the preimage.
+  commentAllowed?: number
 }
 
 export const fetchPayRequest = async (
@@ -736,9 +742,27 @@ export const fetchPayRequest = async (
   return {
     ...body,
     mintFee: mintFee ?? undefined,
-    mintToHash: asBoolean(body.mintToHash)
+    mintToHash: asBoolean(body.mintToHash),
+    commentAllowed: asNumber(body.commentAllowed)
   } as PayRequestInfo
 }
+
+// Whether a SERVICE will credit the minted note at a hash the WALLET names,
+// rather than at the payment preimage. One rule in one place, because
+// getting it wrong in either direction costs a note: read it as no when the
+// SERVICE means yes and the note is the preimage, published on the verify
+// URL; read it as yes when the SERVICE means no and the WALLET waits
+// forever for a note that was minted somewhere else.
+//
+// `commentAllowed >= 64` is LUD-25's own advertisement, the room a
+// hex-encoded 32-byte hash needs in a LUD-12 comment. `mintToHash` is the
+// spelling one mint shipped before that text existed. Either will do.
+export const namesMintOutput = (info: {
+  mintToHash?: boolean
+  commentAllowed?: number
+}): boolean =>
+  info.mintToHash === true ||
+  (typeof info.commentAllowed === 'number' && info.commentAllowed >= 64)
 
 export type InvoiceResult = {
   pr: string

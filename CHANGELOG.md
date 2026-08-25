@@ -47,6 +47,13 @@ was keyed by the payment preimage instead.
   the note to whoever holds the verify URL. Naming the output is what makes
   `verify` safe to offer at all.
 
+- `PayRequestInfo.commentAllowed` is surfaced and `namesMintOutput()` decides
+  the capability from either spelling: LUD-25 advertises it as
+  `commentAllowed >= 64`, one mint shipped `mintToHash` first. One rule in
+  one place, because both directions of a wrong answer cost a note - read it
+  as no and the note is the payment preimage, published on the mint's verify
+  URL; read it as yes and the wallet waits for a note minted elsewhere.
+
 **Also breaking: an unrecognised refusal no longer aborts a restore, and no
 longer counts toward the gap.**
 

@@ -141,6 +141,7 @@ export {type LnurlcashOptions} from './transport.js'
 export {
   fetchNoteInfo,
   fetchNoteInfoByHash,
+  namesMintOutput,
   probeBurnedNote,
   fetchMintAddress,
   meltNote,
