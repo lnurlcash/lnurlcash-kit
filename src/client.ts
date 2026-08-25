@@ -817,9 +817,15 @@ export type InvoiceRequestOptions = LnurlcashOptions & {
   // deriveNoteSecret rather than a CSPRNG makes the note seed-derived from
   // birth, so restoreNotes finds it without any rotate at all.
   //
-  // Read `mintToHash` off the payRequest before sending this, falling back
-  // to the mint address document. A SERVICE that advertises neither ignores
-  // the parameter and keys the note by the preimage as it always has.
+  // Sent as a LUD-12 `comment` of hex(h), which is how LUD-25 specifies it,
+  // and as `h` for SERVICEs that took the parameter form first. Read
+  // `commentAllowed` (>= 64) or `mintToHash` off the payRequest before
+  // sending, falling back to the mint address document. A SERVICE
+  // advertising neither ignores both and keys the note by the preimage.
+  //
+  // Naming an output is what keeps the note out of the payment preimage,
+  // and therefore out of LUD-21 `verify`: an unnamed mint's k1 IS P, and a
+  // SERVICE offering verify on it hands the note to whoever holds that URL.
   //
   // Malformed input is refused here rather than sent, so a WALLET never
   // pays for a quote a SERVICE was going to reject.
@@ -842,7 +848,15 @@ export const requestInvoice = async (
     // lowercase for the same reason a note's k1 is normalised: it is
     // bytes, not text, and a SERVICE storing notes under the hash it was
     // given should be given one spelling of it
-    cbUrl.searchParams.set('h', options.h.trim().toLowerCase())
+    const h = options.h.trim().toLowerCase()
+    // LUD-25 names the output with a LUD-12 `comment` carrying hex(h), and
+    // that is the spelling every conforming SERVICE reads. `h` is sent
+    // alongside it for SERVICEs that adopted the parameter before the
+    // comment form was written; a SERVICE reading either gets the same
+    // hash, and one reading neither keys the note by the preimage as it
+    // always has.
+    cbUrl.searchParams.set('comment', h)
+    cbUrl.searchParams.set('h', h)
   }
   const body = await lnurlFetch(cbUrl, resolveOptions(options))
   if (typeof body?.pr !== 'string') {

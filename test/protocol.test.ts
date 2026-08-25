@@ -512,6 +512,9 @@ describe('naming the note you are buying', () => {
     await requestInvoice(pay.callback, 21000, {h: hashK1(k1), fetch: spying(seen)})
 
     const sent = new URL(seen.at(-1)!)
+    // LUD-25 names the output with a LUD-12 comment; `h` rides along for
+    // services that took the parameter form before that was written
+    expect(sent.searchParams.get('comment')).toBe(hashK1(k1))
     expect(sent.searchParams.get('h')).toBe(hashK1(k1))
     expect(sent.searchParams.get('amount')).toBe('21000')
   })
@@ -523,7 +526,11 @@ describe('naming the note you are buying', () => {
 
     const invoice = await requestInvoice(pay.callback, 21000, {fetch: spying(seen)})
 
-    expect(new URL(seen.at(-1)!).searchParams.has('h')).toBe(false)
+    const sent = new URL(seen.at(-1)!)
+    expect(sent.searchParams.has('h')).toBe(false)
+    // and no empty comment either: a service reading one would have to
+    // decide what a blank commitment means
+    expect(sent.searchParams.has('comment')).toBe(false)
     expect(invoice.pr).toMatch(/^lnbc/)
     expect(invoice.mintToHash).toBe(false)
   })

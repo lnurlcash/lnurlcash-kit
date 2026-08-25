@@ -32,6 +32,21 @@ wire and resumed at an index it had just disclosed.
   `RestoreOptions.probeK1` supplies a positive control, and
   `RestoreResult.hashLookupsConfirmed` reports what was established.
 
+**`requestInvoice` names the mint output with a LUD-12 `comment`.**
+
+LUD-25 specifies the mint-time output hash as `comment = hex(h)`, and that is
+what a conforming SERVICE reads. The kit sent only `h`, a parameter one
+implementation adopted before the comment form was written, so a wallet
+naming an output against a conforming mint was silently ignored and its note
+was keyed by the payment preimage instead.
+
+- `comment` is now sent alongside `h`. A SERVICE reading either gets the same
+  hash; one reading neither behaves exactly as before.
+- This matters beyond conformance: an unnamed mint's `k1` **is** the payment
+  preimage `P`, so a SERVICE offering LUD-21 `verify` on that payment hands
+  the note to whoever holds the verify URL. Naming the output is what makes
+  `verify` safe to offer at all.
+
 **Also breaking: an unrecognised refusal no longer aborts a restore, and no
 longer counts toward the gap.**
 
