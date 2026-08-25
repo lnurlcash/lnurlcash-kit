@@ -99,6 +99,18 @@ export class NoteUnknownError extends ServiceRejectedError {
 // request may already have reached and been processed by the SERVICE: a
 // timeout, a dropped connection, an unparseable response, or a 200 that
 // did not carry the expected confirmation.
+// A hash-only walk that never got a single positive answer. LUD-25 makes
+// the informational GET's `h` OPTIONAL and gives it no capability flag, so
+// a SERVICE that cannot answer by hash is indistinguishable from one that
+// can and simply holds none of the notes asked about: both answer every
+// lookup exactly as they answer an unknown note.
+//
+// Thrown rather than reported as an empty restore because those two cases
+// call for opposite responses from a wallet - "you have nothing here" and
+// "ask again a different way" - and quietly picking the first is how a
+// wallet tells someone their money is gone when it is not.
+export class HashLookupUnsupportedError extends LnurlcashError {}
+
 export class AmbiguousMintError extends LnurlcashError {}
 
 // An AmbiguousMintError from a rotate, split or merge, carrying the fresh

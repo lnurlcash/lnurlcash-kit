@@ -22,6 +22,7 @@ import {
   fetchPayRequest,
   fromLud17,
   hashK1,
+  HashLookupUnsupportedError,
   meltNote,
   mergeNotes,
   newSecretsOf,
@@ -678,11 +679,20 @@ describe('naming the note you are buying', () => {
     // secret nothing derives, leaving the note lost until a rotate.
     m.state.creditNote(deriveNoteSecret(root, host, 0), 21000)
 
-    const {found, next} = await restoreNotes(`${m.url}/w`, root, host)
+    const {found, next} = await restoreNotes(`${m.url}/w`, root, host, {
+      allowSecretDisclosure: true
+    })
     expect(found).toEqual([
-      {index: 0, k1: deriveNoteSecret(root, host, 0), amountMsat: 21000, state: 'live'}
+      {
+        index: 0,
+        k1: deriveNoteSecret(root, host, 0),
+        amountMsat: 21000,
+        state: 'live',
+        callback: found[0]!.callback
+      }
     ])
-    expect(next).toBe(1)
+    // the walk disclosed indices 1..20 looking for more, so they are burned
+    expect(next).toBe(21)
   })
 
   it('separates a burned note and one mid-melt from one not yet minted', async () => {
@@ -852,19 +862,28 @@ describe('restore from a seed', () => {
       m.state.creditNote(deriveNoteSecret(root, host, index), 21000 * (index + 1))
     }
 
-    const result = await restoreNotes(`${m.url}/w`, root, host)
+    const result = await restoreNotes(`${m.url}/w`, root, host, {
+      allowSecretDisclosure: true
+    })
     expect(result.found.map(n => n.index)).toEqual([0, 1, 2])
     expect(result.found.map(n => n.amountMsat)).toEqual([21000, 42000, 63000])
     expect(result.found.every(n => n.state === 'live')).toBe(true)
-    expect(result.next).toBe(3)
+    expect(result.next).toBe(23)
   })
 
   it('finds nothing at a mint the seed never minted at', async () => {
     const m = await mint()
     const host = new URL(m.url).host
-    expect(await restoreNotes(`${m.url}/w`, root, host)).toEqual({
+    expect(
+      await restoreNotes(`${m.url}/w`, root, host, {allowSecretDisclosure: true})
+    ).toEqual({
       found: [],
-      next: 0
+      unresolved: [],
+      // every index the walk touched had its secret disclosed, so none of
+      // them can be minted into later
+      next: 20,
+      hashLookupsConfirmed: false,
+      disclosesSecrets: true
     })
   })
 
@@ -876,9 +895,11 @@ describe('restore from a seed', () => {
     m.state.creditNote(deriveNoteSecret(root, host, 0), 1000)
     m.state.creditNote(deriveNoteSecret(root, host, 5), 2000)
 
-    const result = await restoreNotes(`${m.url}/w`, root, host)
+    const result = await restoreNotes(`${m.url}/w`, root, host, {
+      allowSecretDisclosure: true
+    })
     expect(result.found.map(n => n.index)).toEqual([0, 5])
-    expect(result.next).toBe(6)
+    expect(result.next).toBe(26)
   })
 
   it('stops after `gap` consecutive unknown indices', async () => {
@@ -888,9 +909,12 @@ describe('restore from a seed', () => {
     m.state.creditNote(deriveNoteSecret(root, host, 5), 2000)
 
     // a gap of three never reaches index 5
-    const result = await restoreNotes(`${m.url}/w`, root, host, {gap: 3})
+    const result = await restoreNotes(`${m.url}/w`, root, host, {
+      gap: 3,
+      allowSecretDisclosure: true
+    })
     expect(result.found.map(n => n.index)).toEqual([0])
-    expect(result.next).toBe(1)
+    expect(result.next).toBe(4)
   })
 
   it('counts a spent index as used, and does not report it as a note', async () => {
@@ -901,10 +925,13 @@ describe('restore from a seed', () => {
     const info = await fetchNoteInfo(noteUrl(m, spent))
     await rotateNote(info.callback, spent)
 
-    const result = await restoreNotes(`${m.url}/w`, root, host)
+    const result = await restoreNotes(`${m.url}/w`, root, host, {
+      allowSecretDisclosure: true
+    })
     expect(result.found).toEqual([])
-    // re-deriving index 0 would mint a note the service already burned
-    expect(result.next).toBe(1)
+    // re-deriving index 0 would mint a note the service already burned, and
+    // 1..20 had their secrets disclosed by the walk that looked for more
+    expect(result.next).toBe(21)
   })
 
   it('resumes from a start index without re-walking what came before', async () => {
@@ -913,18 +940,22 @@ describe('restore from a seed', () => {
     m.state.creditNote(deriveNoteSecret(root, host, 0), 1000)
     m.state.creditNote(deriveNoteSecret(root, host, 7), 2000)
 
-    const result = await restoreNotes(`${m.url}/w`, root, host, {start: 7})
+    const result = await restoreNotes(`${m.url}/w`, root, host, {
+      start: 7,
+      allowSecretDisclosure: true
+    })
     expect(result.found.map(n => n.index)).toEqual([7])
-    expect(result.next).toBe(8)
+    expect(result.next).toBe(28)
   })
 
   it('records a note the service reports as pending, with no amount', async () => {
     const host = 'mint.example'
     const k1 = deriveNoteSecret(root, host, 0)
     const stub: typeof fetch = async input => {
-      const queried = new URL(input.toString()).searchParams.get('k1')
+      // asked by hash, so match the hash - the secret never goes out
+      const queried = new URL(input.toString()).searchParams.get('h')
       const body =
-        queried === k1
+        queried === hashK1(k1)
           ? {status: 'ERROR', reason: 'pending'}
           : {status: 'ERROR', reason: 'Unknown note.'}
       return new Response(JSON.stringify(body), {
@@ -966,11 +997,13 @@ describe('restore from a seed', () => {
     // rotate, rotate, split: four indices consumed
     expect(source.index()).toBe(4)
 
-    const result = await restoreNotes(`${m.url}/w`, root, host)
+    const result = await restoreNotes(`${m.url}/w`, root, host, {
+      allowSecretDisclosure: true
+    })
     expect(result.found.map(n => n.index)).toEqual([2, 3])
     expect(result.found.map(n => n.k1)).toEqual([split.k1, split.change])
     expect(result.found.map(n => n.amountMsat)).toEqual([40_000, 60_000])
-    expect(result.next).toBe(4)
+    expect(result.next).toBe(24)
   })
 })
 
@@ -1082,5 +1115,160 @@ describe('a mutation the transport retried', () => {
     expect(newSecretsOf(new Error('something else'))).toEqual([])
     expect(newSecretsOf(undefined)).toEqual([])
     expect(newSecretsOf('not an error')).toEqual([])
+  })
+})
+
+describe('a restore that does not put the money on the wire', () => {
+  const root = deriveNoteRoot(hexToBytes('44'.repeat(32)))
+  const HOST = 'mint.example'
+  const BASE = 'https://mint.example/w'
+
+  // A SERVICE that answers the informational GET by hash, as LUD-25's
+  // "Checking a note without exposing it" describes: same response, no
+  // echoed k1, and the secret never on the wire.
+  const service = (
+    notes: Map<string, number>,
+    seenK1s: string[],
+    {answersByHash = true, reasonFor = (_key: string): string => 'Unknown note.'} = {}
+  ): typeof fetch =>
+    (async input => {
+      const u = new URL(input.toString())
+      const k1 = u.searchParams.get('k1')
+      const h = u.searchParams.get('h')
+      if (k1) seenK1s.push(k1)
+      const key = h ? (answersByHash ? h : null) : k1 ? hashK1(k1) : null
+      const amount = key === null ? undefined : notes.get(key)
+      const body =
+        amount === undefined
+          ? {status: 'ERROR', reason: reasonFor(key ?? '')}
+          : {
+              tag: 'withdrawRequest',
+              callback: `${BASE}/cb`,
+              maxWithdrawable: amount,
+              minWithdrawable: 0,
+              ...(k1 ? {k1} : {})
+            }
+      return new Response(JSON.stringify(body), {
+        headers: {'content-type': 'application/json'}
+      })
+    }) as typeof fetch
+
+  const noteAt = (index: number, msat: number, into: Map<string, number>) => {
+    const k1 = deriveNoteSecret(root, HOST, index)
+    into.set(hashK1(k1), msat)
+    return k1
+  }
+
+  it('finds the notes without disclosing a single secret', async () => {
+    const notes = new Map<string, number>()
+    const first = noteAt(0, 21_000, notes)
+    const second = noteAt(1, 42_000, notes)
+    const seen: string[] = []
+
+    const result = await restoreNotes(BASE, root, HOST, {}, {fetch: service(notes, seen)})
+
+    expect(result.found.map(n => n.k1)).toEqual([first, second])
+    expect(result.found.map(n => n.amountMsat)).toEqual([21_000, 42_000])
+    expect(result.disclosesSecrets).toBe(false)
+    expect(result.hashLookupsConfirmed).toBe(true)
+    expect(seen).toEqual([])
+    // nothing was disclosed, so the very next index is still safe to mint into
+    expect(result.next).toBe(2)
+  })
+
+  // The reason the walk asks by hash at all. It queries `gap` indices PAST
+  // the last note in use, and those are exactly the ones the wallet is about
+  // to mint into: asking by secret publishes the next twenty secrets the
+  // wallet will ever use, and then it goes and uses them.
+  it('never hands back an index whose secret it disclosed', async () => {
+    const notes = new Map<string, number>()
+    noteAt(0, 21_000, notes)
+    const seen: string[] = []
+
+    const result = await restoreNotes(
+      BASE,
+      root,
+      HOST,
+      {gap: 5, allowSecretDisclosure: true},
+      {fetch: service(notes, seen, {answersByHash: false})}
+    )
+
+    expect(result.disclosesSecrets).toBe(true)
+    expect(seen.length).toBe(6)
+    const nextSecret = deriveNoteSecret(root, HOST, result.next)
+    expect(seen).not.toContain(nextSecret)
+    expect(result.next).toBe(6)
+  })
+
+  it('refuses to call a wallet empty when it never proved the service answers by hash', async () => {
+    const seen: string[] = []
+    await expect(
+      restoreNotes(
+        BASE,
+        root,
+        HOST,
+        {gap: 3},
+        {fetch: service(new Map(), seen, {answersByHash: false})}
+      )
+    ).rejects.toBeInstanceOf(HashLookupUnsupportedError)
+    // and it did not quietly fall back to the disclosing form
+    expect(seen).toEqual([])
+  })
+
+  it('accepts a probe as proof, so a genuinely empty wallet reports empty', async () => {
+    const notes = new Map<string, number>()
+    // a note this seed does not derive: the caller knows it exists, which
+    // is the whole point of a positive control
+    const probe = 'ab'.repeat(32)
+    notes.set(hashK1(probe), 1000)
+
+    const result = await restoreNotes(
+      BASE,
+      root,
+      HOST,
+      {gap: 3, probeK1: probe},
+      {fetch: service(notes, [])}
+    )
+    expect(result.found).toEqual([])
+    expect(result.hashLookupsConfirmed).toBe(true)
+    expect(result.next).toBe(0)
+  })
+
+  // The gap counter is what decides where a walk stops, so anything that
+  // advances it wrongly abandons live notes beyond the run - silently, and
+  // with a `next` that looks perfectly reasonable.
+  it('does not spend the gap on a refusal it has no name for', async () => {
+    const notes = new Map<string, number>()
+    const zero = deriveNoteSecret(root, HOST, 0)
+    const beyond = noteAt(2, 7_000, notes)
+    const seen: string[] = []
+
+    const result = await restoreNotes(
+      BASE,
+      root,
+      HOST,
+      {gap: 2},
+      {
+        fetch: service(notes, seen, {
+          reasonFor: key => (key === hashK1(zero) ? 'note expired' : 'Unknown note.')
+        })
+      }
+    )
+
+    // index 0 was refused for a reason this version has never heard of. It
+    // is not a note, but the service plainly knows the index, so the gap
+    // counter resets and the walk reaches the live note at 2. Advance it
+    // instead and the walk stops at index 1, and that note is lost.
+    expect(result.unresolved).toEqual([{index: 0, k1: zero, reason: 'note expired'}])
+    expect(result.found.map(n => n.k1)).toEqual([beyond])
+    expect(result.next).toBe(3)
+  })
+
+  it('still throws when the service itself fails, rather than reporting a next it never established', async () => {
+    const failing: typeof fetch = async () =>
+      new Response('nope', {status: 500, headers: {'content-type': 'text/plain'}})
+    await expect(
+      restoreNotes(BASE, root, HOST, {gap: 2}, {fetch: failing})
+    ).rejects.toBeTruthy()
   })
 })

@@ -71,6 +71,27 @@ export const isValidNoteInput = (value: string): boolean =>
 // one's own to read it from. The spec has a SERVICE ignore `amount` here
 // regardless, but some implementations validate it strictly, and a
 // placeholder like 0 risks being rejected rather than ignored.
+// The informational GET asked by hash rather than by secret (LUD-25,
+// "Checking a note without exposing it"). Same endpoint and same response,
+// minus the echoed k1: the SERVICE matches sha256(k1) against the key it
+// already files every note under, and never sees the secret at all.
+//
+// `amount` and `sig` are dropped rather than carried. Neither is read on an
+// informational GET, and both would narrow a lookup whose whole purpose is
+// to disclose as little as possible.
+export const buildNoteInfoUrlByHash = (withdrawLink: string, h: string): string => {
+  const hex = h.trim().toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(hex)) {
+    throw new Error('A note hash must be 32 bytes of hex.')
+  }
+  const url = new URL(fromLud17(withdrawLink.trim()))
+  url.searchParams.delete('k1')
+  url.searchParams.delete('amount')
+  url.searchParams.delete('sig')
+  url.searchParams.set('h', hex)
+  return url.toString()
+}
+
 export const buildNoteUrl = (
   withdrawLink: string,
   k1: string,

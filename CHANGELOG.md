@@ -3,6 +3,50 @@
 Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may carry breaking changes; pin an exact version.
 
+## 0.4.0 - unreleased
+
+**Breaking: `restoreNotes` asks by hash, and no longer discloses note
+secrets by default.**
+
+The walk queries every index up to `gap` past the last one in use, and those
+are exactly the indices the wallet is about to mint into next. Asking by
+secret therefore published the next `gap` secrets the wallet would ever use,
+in cleartext query strings, and the returned `next` then pointed straight at
+one of them. A five-note wallet put twenty-five live-or-future secrets on the
+wire and resumed at an index it had just disclosed.
+
+- The walk now uses the informational GET's `h` parameter (LUD-25, "Checking
+  a note without exposing it"), so nothing spendable leaves the wallet.
+  `fetchNoteInfoByHash` and `buildNoteInfoUrlByHash` expose it directly, and
+  `RestoredNote.callback` carries the callback so a caller need not ask again
+  with the raw secret.
+- `RestoreOptions.allowSecretDisclosure` (default `false`) permits the old
+  form as an explicit fallback, never automatically. When it is used,
+  `RestoreResult.disclosesSecrets` is `true` and `next` skips every index the
+  walk touched, because a disclosed secret is spent whether or not a note was
+  ever minted under it.
+- `h` support is OPTIONAL in LUD-25 with no capability flag, so a SERVICE
+  that cannot answer by hash is indistinguishable from one holding none of
+  the notes asked about. A walk that never gets a positive answer now throws
+  `HashLookupUnsupportedError` rather than reporting an empty wallet.
+  `RestoreOptions.probeK1` supplies a positive control, and
+  `RestoreResult.hashLookupsConfirmed` reports what was established.
+
+**Also breaking: an unrecognised refusal no longer aborts a restore, and no
+longer counts toward the gap.**
+
+`classifyNoteError` falls through to a bare `ServiceRejectedError` for any
+reason string it has no pattern for, and the walk rethrew it, so a single
+unfamiliar reason from a SERVICE ended the whole restore. Any new note state
+- expiry being the obvious one - would have done it.
+
+- Only `NoteUnknownError` advances the gap counter now. Every other refusal
+  means the SERVICE knows the index, so it resets the counter and is reported
+  in the new `RestoreResult.unresolved`. Advancing it was how a walk could
+  terminate early and silently abandon live notes beyond the run.
+- Transport and protocol failures still throw: a SERVICE being down is not a
+  statement about an index.
+
 ## 0.3.0 - 2026-08-24
 
 - Additive bound-mint receipt parsing and validation for sealed signers:
