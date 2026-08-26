@@ -3,7 +3,7 @@
 Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may carry breaking changes; pin an exact version.
 
-## 0.4.0 - unreleased
+## 0.4.0 - 2026-08-26
 
 **Breaking: `restoreNotes` asks by hash, and no longer discloses note
 secrets by default.**
