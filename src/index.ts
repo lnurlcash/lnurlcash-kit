@@ -50,6 +50,7 @@ export {
   resolveNoteInput,
   isValidNoteInput,
   buildNoteUrl,
+  buildNoteInfoUrlByHash,
   withNewK1,
   withoutK1
 } from './note.js'
@@ -85,7 +86,8 @@ export {
   restoreNotes,
   type RestoredNote,
   type RestoreResult,
-  type RestoreOptions
+  type RestoreOptions,
+  type UnresolvedIndex
 } from './restore.js'
 
 export {
@@ -127,6 +129,7 @@ export {
   NoteSpentError,
   NoteUnknownError,
   InsufficientValueError,
+  HashLookupUnsupportedError,
   AmbiguousMintError,
   AmbiguousMutationError,
   classifyNoteError,
@@ -137,6 +140,8 @@ export {type LnurlcashOptions} from './transport.js'
 
 export {
   fetchNoteInfo,
+  fetchNoteInfoByHash,
+  namesMintOutput,
   probeBurnedNote,
   fetchMintAddress,
   meltNote,
@@ -154,6 +159,7 @@ export {
   validateBoundMintReceipt,
   claimMintedNote,
   type WithdrawRequestInfo,
+  type NoteInfoByHash,
   type MintAddressInfo,
   type MintContact,
   type WithdrawSuccessResponse,
@@ -182,6 +188,8 @@ import {settleNoteForValue, type SettleForValueOptions} from './settle.js'
 // who would otherwise thread the same object through every call site.
 export const createClient = (options: LnurlcashOptions = {}) => ({
   fetchNoteInfo: (url: string) => client.fetchNoteInfo(url, options),
+  fetchNoteInfoByHash: (withdrawLink: string, h: string) =>
+    client.fetchNoteInfoByHash(withdrawLink, h, options),
   probeBurnedNote: (url: string) => client.probeBurnedNote(url, options),
   fetchMintAddress: (url: string) => client.fetchMintAddress(url, options),
   meltNote: (callback: string, k1: string, pr: string) =>

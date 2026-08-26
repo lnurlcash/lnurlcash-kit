@@ -11,12 +11,15 @@ import {
 } from './errors.js'
 import {lnurlFetch, resolveOptions, type LnurlcashOptions} from './transport.js'
 import {hashK1, isPreimage} from './secrets.js'
-import {buildNoteUrl, noteK1, withNewK1} from './note.js'
+import {buildNoteInfoUrlByHash, buildNoteUrl, noteK1, withNewK1} from './note.js'
 import {decodeBolt11AmountMsat, sameInvoice} from './bolt11.js'
 import {parseMintFee, type MintFee} from './fees.js'
 import {verifyNoteSignatureHashAgainst} from './signature.js'
 
 // ---- the informational GET ----
+
+// What a lookup by hash returns: a withdrawRequest with no echoed k1.
+export type NoteInfoByHash = Omit<WithdrawRequestInfo, 'k1'> & {k1?: string}
 
 export type WithdrawRequestInfo = {
   tag: 'withdrawRequest'
@@ -42,6 +45,28 @@ export type WithdrawRequestInfo = {
   payLink?: string
 }
 
+// Shared by both informational lookups. `k1` is required on a lookup by
+// secret, where the spec makes the echo a MUST, and absent on a lookup by
+// hash, where the spec omits it: a WALLET asking by hash already holds the
+// value it hashed, so there is nothing for the SERVICE to hand back.
+const assertWithdrawRequestShape = (body: any, {requireK1}: {requireK1: boolean}): void => {
+  if (
+    body?.tag !== 'withdrawRequest' ||
+    typeof body.callback !== 'string' ||
+    (requireK1 && typeof body.k1 !== 'string') ||
+    typeof body.maxWithdrawable !== 'number' ||
+    !Number.isSafeInteger(body.maxWithdrawable) ||
+    body.maxWithdrawable < 0 ||
+    (body.minWithdrawable !== undefined &&
+      (typeof body.minWithdrawable !== 'number' ||
+        !Number.isSafeInteger(body.minWithdrawable) ||
+        body.minWithdrawable < 0 ||
+        body.minWithdrawable > body.maxWithdrawable))
+  ) {
+    throw new ProtocolError('Not a withdrawRequest (unexpected response).')
+  }
+}
+
 // LUD-03 step one. Never burns, rotates or alters the note. maxWithdrawable
 // is the only authoritative statement of what the note is worth; the URL's
 // own `amount` is a claim the SERVICE ignores here.
@@ -65,21 +90,7 @@ export const fetchNoteInfo = async (
     if (err instanceof ServiceRejectedError) throw classifyNoteError(err.reason)
     throw err
   }
-  if (
-    body?.tag !== 'withdrawRequest' ||
-    typeof body.callback !== 'string' ||
-    typeof body.k1 !== 'string' ||
-    typeof body.maxWithdrawable !== 'number' ||
-    !Number.isSafeInteger(body.maxWithdrawable) ||
-    body.maxWithdrawable < 0 ||
-    (body.minWithdrawable !== undefined &&
-      (typeof body.minWithdrawable !== 'number' ||
-        !Number.isSafeInteger(body.minWithdrawable) ||
-        body.minWithdrawable < 0 ||
-        body.minWithdrawable > body.maxWithdrawable))
-  ) {
-    throw new ProtocolError('Not a withdrawRequest (unexpected response).')
-  }
+  assertWithdrawRequestShape(body, {requireK1: true})
   // Spec MUST: the response's k1 is the bearer secret itself, never a
   // derived or opaque id. A SERVICE returning something else for the k1 it
   // was queried with is non-compliant - or the note was rotated by
@@ -93,6 +104,45 @@ export const fetchNoteInfo = async (
   // Dropped rather than passed on if it is not a URL on this note's own
   // origin, so a caller can treat its presence as the fact it looks like.
   const info = body as WithdrawRequestInfo
+  const payLink = sameOriginPayLink(body.payLink, reqUrl)
+  if (payLink === undefined) delete info.payLink
+  else info.payLink = payLink
+  return info
+}
+
+// The same lookup, asked by hash. The SERVICE learns which note is being
+// asked about but never the secret that spends it, so this is the form a
+// WALLET should use for any lookup that is not immediately followed by a
+// mutation: checking a balance, reconciling, and above all walking a
+// derivation during a restore, where the lookup-by-secret form puts every
+// note a wallet owns on the wire at once.
+//
+// Support is OPTIONAL in LUD-25 and there is no capability flag. A SERVICE
+// that does not index by hash answers every hash lookup exactly as it
+// answers an unknown note, so a NoteUnknownError here means "unknown, OR
+// this SERVICE cannot answer hash lookups at all" and a caller MUST NOT
+// read it as proof the note is gone. Only a successful answer is proof of
+// anything; see restoreNotes, which tracks exactly that.
+export const fetchNoteInfoByHash = async (
+  withdrawLink: string,
+  h: string,
+  options: LnurlcashOptions = {}
+): Promise<NoteInfoByHash> => {
+  const opts = resolveOptions(options)
+  const reqUrl = new URL(buildNoteInfoUrlByHash(withdrawLink, h))
+  let body: any
+  try {
+    body = await lnurlFetch(reqUrl, opts)
+  } catch (err) {
+    if (err instanceof ServiceRejectedError) throw classifyNoteError(err.reason)
+    throw err
+  }
+  assertWithdrawRequestShape(body, {requireK1: false})
+  // No echo check to make: there is no queried k1 to compare against. A
+  // SERVICE that sends one anyway is not refused - it is telling the caller
+  // a secret the caller already holds, which costs nothing - but nothing
+  // here relies on it either.
+  const info = body as NoteInfoByHash
   const payLink = sameOriginPayLink(body.payLink, reqUrl)
   if (payLink === undefined) delete info.payLink
   else info.payLink = payLink
@@ -667,6 +717,12 @@ export type PayRequestInfo = {
   // that only advertises there. Undefined means the SERVICE said nothing,
   // which is the same as no. See requestInvoice.
   mintToHash?: boolean
+  // LUD-12's own field, and the spelling LUD-25 uses to advertise the same
+  // capability: the output hash rides in a `comment`, so a mint that takes
+  // one needs to allow at least the 64 characters a hex-encoded 32-byte
+  // hash costs. A SERVICE advertising either this (>= 64) or `mintToHash`
+  // will name the note; one advertising neither keys it by the preimage.
+  commentAllowed?: number
 }
 
 export const fetchPayRequest = async (
@@ -686,9 +742,27 @@ export const fetchPayRequest = async (
   return {
     ...body,
     mintFee: mintFee ?? undefined,
-    mintToHash: asBoolean(body.mintToHash)
+    mintToHash: asBoolean(body.mintToHash),
+    commentAllowed: asNumber(body.commentAllowed)
   } as PayRequestInfo
 }
+
+// Whether a SERVICE will credit the minted note at a hash the WALLET names,
+// rather than at the payment preimage. One rule in one place, because
+// getting it wrong in either direction costs a note: read it as no when the
+// SERVICE means yes and the note is the preimage, published on the verify
+// URL; read it as yes when the SERVICE means no and the WALLET waits
+// forever for a note that was minted somewhere else.
+//
+// `commentAllowed >= 64` is LUD-25's own advertisement, the room a
+// hex-encoded 32-byte hash needs in a LUD-12 comment. `mintToHash` is the
+// spelling one mint shipped before that text existed. Either will do.
+export const namesMintOutput = (info: {
+  mintToHash?: boolean
+  commentAllowed?: number
+}): boolean =>
+  info.mintToHash === true ||
+  (typeof info.commentAllowed === 'number' && info.commentAllowed >= 64)
 
 export type InvoiceResult = {
   pr: string
@@ -767,9 +841,15 @@ export type InvoiceRequestOptions = LnurlcashOptions & {
   // deriveNoteSecret rather than a CSPRNG makes the note seed-derived from
   // birth, so restoreNotes finds it without any rotate at all.
   //
-  // Read `mintToHash` off the payRequest before sending this, falling back
-  // to the mint address document. A SERVICE that advertises neither ignores
-  // the parameter and keys the note by the preimage as it always has.
+  // Sent as a LUD-12 `comment` of hex(h), which is how LUD-25 specifies it,
+  // and as `h` for SERVICEs that took the parameter form first. Read
+  // `commentAllowed` (>= 64) or `mintToHash` off the payRequest before
+  // sending, falling back to the mint address document. A SERVICE
+  // advertising neither ignores both and keys the note by the preimage.
+  //
+  // Naming an output is what keeps the note out of the payment preimage,
+  // and therefore out of LUD-21 `verify`: an unnamed mint's k1 IS P, and a
+  // SERVICE offering verify on it hands the note to whoever holds that URL.
   //
   // Malformed input is refused here rather than sent, so a WALLET never
   // pays for a quote a SERVICE was going to reject.
@@ -792,7 +872,15 @@ export const requestInvoice = async (
     // lowercase for the same reason a note's k1 is normalised: it is
     // bytes, not text, and a SERVICE storing notes under the hash it was
     // given should be given one spelling of it
-    cbUrl.searchParams.set('h', options.h.trim().toLowerCase())
+    const h = options.h.trim().toLowerCase()
+    // LUD-25 names the output with a LUD-12 `comment` carrying hex(h), and
+    // that is the spelling every conforming SERVICE reads. `h` is sent
+    // alongside it for SERVICEs that adopted the parameter before the
+    // comment form was written; a SERVICE reading either gets the same
+    // hash, and one reading neither keys the note by the preimage as it
+    // always has.
+    cbUrl.searchParams.set('comment', h)
+    cbUrl.searchParams.set('h', h)
   }
   const body = await lnurlFetch(cbUrl, resolveOptions(options))
   if (typeof body?.pr !== 'string') {
