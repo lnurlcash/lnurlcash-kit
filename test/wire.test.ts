@@ -99,6 +99,20 @@ describe('callback request vectors', () => {
     ).rejects.toBeInstanceOf(RequestRefusedError)
     expect(seen).toHaveLength(0)
   })
+
+  // A merge of 2+ notes plans its batches before the request layer is ever
+  // reached, and that planning parses the callback URL. It must not be the
+  // one place a caller sees a raw TypeError instead of this library's own
+  // error taxonomy.
+  it('refuses an invalid callback the same way whatever the note count', async () => {
+    const opts = {fetch: (() => { throw new Error('must not be called') }) as unknown as typeof fetch}
+    await expect(mergeNotes('not a valid url', ['a'.repeat(64)], opts)).rejects.toBeInstanceOf(
+      RequestRefusedError
+    )
+    await expect(
+      mergeNotes('not a valid url', ['a'.repeat(64), 'b'.repeat(64)], opts)
+    ).rejects.toBeInstanceOf(RequestRefusedError)
+  })
 })
 
 describe('bound mint settlement receipts', () => {

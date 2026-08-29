@@ -328,6 +328,46 @@ describe('split and merge', () => {
     expect(Math.max(...live)).toBe(batches[0]!.length * 1000)
   })
 
+  it('hands back the carried note when a later batch is refused outright', async () => {
+    const m = await mint()
+    const parts = Array.from({length: 40}, (_, i) =>
+      secret((i + 100).toString(16).padStart(2, '0'))
+    )
+    parts.forEach(k1 => m.state.creditNote(k1, 1000))
+    const info = await fetchNoteInfo(noteUrl(m, parts[0]!))
+    const batches = mergeBatches(info.callback, parts)
+    expect(batches.length).toBeGreaterThan(1)
+
+    // The first batch lands. The second is refused definitively - a mint
+    // with a tighter k1 cap than our URL budget, or an input mid-melt
+    // elsewhere. Nothing of THIS request was burned, but the note carried
+    // from the first batch is live and exists nowhere else.
+    let calls = 0
+    const refusingFetch: typeof fetch = (input, init) => {
+      if (++calls > 1) {
+        return Promise.resolve(
+          new Response(JSON.stringify({status: 'ERROR', reason: 'Too many k1s (max 21).'}), {
+            headers: {'content-type': 'application/json'}
+          })
+        )
+      }
+      return fetch(input as string, init)
+    }
+
+    const err = await mergeNotes(info.callback, parts, {fetch: refusingFetch}).catch(e => e)
+
+    const rescued = newSecretsOf(err)
+    expect(rescued.length).toBeGreaterThan(0)
+    const live = await Promise.all(
+      rescued.map(k1 =>
+        fetchNoteInfo(noteUrl(m, k1))
+          .then(i => i.maxWithdrawable)
+          .catch(() => 0)
+      )
+    )
+    expect(Math.max(...live)).toBe(batches[0]!.length * 1000)
+  })
+
   it('refuses to send a mutation with no note named', async () => {
     const m = await mint()
     await expect(mergeNotes(`${m.url}/w/cb`, [])).rejects.toBeInstanceOf(

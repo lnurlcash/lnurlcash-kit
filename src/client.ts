@@ -641,6 +641,15 @@ export const mergeBatches = (
   budget: number = MAX_URL_CHARS
 ): string[][] => {
   const placeholder = '0'.repeat(64)
+  // Planning parses the callback before the request layer would have, so a
+  // malformed one must fail here the way it fails there - not as a raw
+  // TypeError from URL, which is the one error a caller catching this
+  // library's own taxonomy would miss.
+  try {
+    new URL(callback)
+  } catch {
+    throw new RequestRefusedError('The service provided an invalid callback URL.')
+  }
   const fits = (candidate: string[], carried: boolean): boolean => {
     const url = new URL(callback)
     if (carried) url.searchParams.append('k1', placeholder)
@@ -702,15 +711,32 @@ const foldNotes = async (
       carried = newK1
       signature = result.signature
     } catch (err) {
-      // Unlike a single merge, a fold can fail with value already moved:
-      // `carried` names a live note holding every batch folded so far, and
-      // it exists nowhere else. It goes back with the failure whatever the
-      // failure was.
       const live = carried === null ? [newK1] : [carried, newK1]
       if (err instanceof AmbiguousMintError) {
         throw new AmbiguousMutationError((err as Error).message, live)
       }
-      throw keepingOutputs(err, live)
+      // Before the first batch lands nothing has moved, so the ordinary
+      // single-mutation rule applies: only a refusal that could describe an
+      // ALREADY-applied mutation carries secrets, because only then might
+      // the caller be holding the sole copy.
+      if (carried === null) throw keepingOutputs(err, live)
+      // After it lands the rule changes, and keepingOutputs is the wrong
+      // tool: `carried` is not a candidate output that may or may not exist,
+      // it is a note the SERVICE has already minted, worth every batch
+      // folded so far, and this local is its only copy anywhere. A refusal
+      // that burned nothing of THIS request - a policy refusal, a k1 the
+      // mint caps at, an input mid-melt elsewhere - is still fatal to it if
+      // it leaves without saying so. So it goes back whatever the class,
+      // and the class itself is preserved: a caller distinguishing pending
+      // from spent still can.
+      if (err instanceof ServiceRejectedError) {
+        err.newSecrets = live
+        throw err
+      }
+      throw new AmbiguousMutationError(
+        err instanceof Error ? err.message : String(err),
+        live
+      )
     }
   }
   return {k1: carried as string, signature}

@@ -16,10 +16,13 @@ folds the inputs batch into batch, each merge's output carried into the
 next, as the draft advises.
 
 A fold can fail with value already moved, which a single merge never could:
-the carried note holds every batch folded so far and exists nowhere else.
-It is returned with the failure whatever the failure was - including the
-network errors `newSecretsOf` previously reported nothing for - so a caller
-that persists what it is handed cannot lose it.
+once a batch has landed, the carried note is one the SERVICE has already
+minted, worth every batch folded so far, and the fold holds its only copy.
+It is returned with the failure whatever the class of failure - a network
+drop, a policy refusal, a k1 count the mint caps at, an input mid-melt
+elsewhere - so a caller that persists what `newSecretsOf` hands it cannot
+lose the fold's own output. The error's class is preserved, so a caller
+telling pending apart from spent still can.
 
 `mergeBatches(callback, k1s, budget?)` is exported for callers that want to
 show or plan the batches before committing to them.
