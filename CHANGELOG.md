@@ -3,7 +3,7 @@
 Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may carry breaking changes; pin an exact version.
 
-## Unreleased
+## 0.5.0 - 2026-08-29
 
 **A large merge is folded in batches rather than sent as one over-long
 URL.** LUD-25 bounds a merge by ordinary URL length, not by anything in the
