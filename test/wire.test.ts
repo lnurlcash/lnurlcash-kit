@@ -19,6 +19,7 @@ import {
   fetchNoteInfo,
   fetchPayRequest,
   meltNote,
+  mergeBatches,
   mergeNotes,
   mergeNotesWithHash,
   requestInvoice,
@@ -98,6 +99,25 @@ describe('callback request vectors', () => {
       splitNote('https://mint.example/w/cb', [], 1000, opts)
     ).rejects.toBeInstanceOf(RequestRefusedError)
     expect(seen).toHaveLength(0)
+  })
+
+  // URL length is not the only bound. No LUD-25 field advertises a mint's
+  // own k1 cap, and the caps in the wild are tighter than 2000 characters
+  // allows: moneyer defaults to 21, lnurl-mint to 100. Batching by URL
+  // alone builds a 28-note request that a moneyer refuses outright, so the
+  // count is bounded too - and a caller who knows the mint's real cap can
+  // say so.
+  it('bounds a batch by note count as well as URL length', async () => {
+    const cb = 'https://mint.example/w/cb'
+    const k1s = Array.from({length: 60}, (_, i) => i.toString(16).padStart(64, '0'))
+    for (const batch of mergeBatches(cb, k1s)) {
+      expect(batch.length).toBeLessThanOrEqual(20)
+    }
+    // and a caller that knows better can narrow it further
+    for (const batch of mergeBatches(cb, k1s, {maxNotes: 5})) {
+      expect(batch.length).toBeLessThanOrEqual(5)
+    }
+    expect(mergeBatches(cb, k1s, {maxNotes: 5}).flat()).toEqual(k1s)
   })
 
   // A merge of 2+ notes plans its batches before the request layer is ever

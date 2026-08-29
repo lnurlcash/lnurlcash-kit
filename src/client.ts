@@ -635,11 +635,30 @@ const MAX_URL_CHARS = 2000
 // a long callback path leaves room for fewer notes than a short one.
 // `carried` accounts for the previous batch's output, which every batch
 // after the first folds in alongside its own inputs.
+// No LUD-25 field advertises a SERVICE's own limit on how many k1 it will
+// accept in one request, and the limits in the wild are tighter than 2000
+// characters allows: moneyer defaults to 21, lnurl-mint to 100. Batching on
+// URL length alone therefore builds requests a conforming mint refuses
+// outright. 20 stays under the tightest cap known, and a caller that has
+// learned a SERVICE's real limit can pass it.
+const MAX_NOTES_PER_BATCH = 20
+
+export type MergeBatchOptions = {
+  // Longest URL to build. Defaults to 2000 characters.
+  budget?: number
+  // Most k1 to name in one request. Defaults to 20.
+  maxNotes?: number
+}
+
 export const mergeBatches = (
   callback: string,
   k1s: string[],
-  budget: number = MAX_URL_CHARS
+  options: MergeBatchOptions | number = {}
 ): string[][] => {
+  // A bare number was the first shape of this argument; kept so the change
+  // is not breaking.
+  const {budget = MAX_URL_CHARS, maxNotes = MAX_NOTES_PER_BATCH} =
+    typeof options === 'number' ? {budget: options} : options
   const placeholder = '0'.repeat(64)
   // Planning parses the callback before the request layer would have, so a
   // malformed one must fail here the way it fails there - not as a raw
@@ -663,7 +682,7 @@ export const mergeBatches = (
     const next = [...batch, k1]
     // A batch of one goes out whatever its length: there is nothing left
     // to split, and refusing here would strand the note instead.
-    if (batch.length > 0 && !fits(next, batches.length > 0)) {
+    if (batch.length > 0 && (next.length > maxNotes || !fits(next, batches.length > 0))) {
       batches.push(batch)
       batch = [k1]
     } else batch = next

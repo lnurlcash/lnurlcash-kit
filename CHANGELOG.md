@@ -24,8 +24,17 @@ elsewhere - so a caller that persists what `newSecretsOf` hands it cannot
 lose the fold's own output. The error's class is preserved, so a caller
 telling pending apart from spent still can.
 
-`mergeBatches(callback, k1s, budget?)` is exported for callers that want to
-show or plan the batches before committing to them.
+Batches are bounded by note count as well as URL length. No LUD-25 field
+advertises a SERVICE's own limit on how many `k1` one request may name, and
+the limits in the wild are tighter than 2000 characters allows - moneyer
+defaults to 21, lnurl-mint to 100 - so batching on length alone built
+requests a conforming mint refuses outright. The default is 20, under the
+tightest cap known.
+
+`mergeBatches(callback, k1s, options?)` is exported for callers that want to
+plan the batches themselves - `{budget, maxNotes}`, or a bare number for the
+budget as before. A caller that has learned a SERVICE's real limit should
+pass it.
 
 ## 0.4.0 - 2026-08-26
 
