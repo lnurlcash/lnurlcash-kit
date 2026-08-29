@@ -149,6 +149,7 @@ export {
   rotateNoteWithHash,
   splitNote,
   splitNoteWithHash,
+  mergeBatches,
   mergeNotes,
   mergeNotesWithHash,
   settleNote,

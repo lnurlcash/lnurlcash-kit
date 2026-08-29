@@ -9,7 +9,12 @@ import {
   ServiceRejectedError,
   classifyNoteError
 } from './errors.js'
-import {lnurlFetch, resolveOptions, type LnurlcashOptions} from './transport.js'
+import {
+  lnurlFetch,
+  resolveOptions,
+  type LnurlcashOptions,
+  type ResolvedOptions
+} from './transport.js'
 import {hashK1, isPreimage} from './secrets.js'
 import {buildNoteInfoUrlByHash, buildNoteUrl, noteK1, withNewK1} from './note.js'
 import {decodeBolt11AmountMsat, sameInvoice} from './bolt11.js'
@@ -617,6 +622,47 @@ export const splitNote = async (
   }
 }
 
+// LUD-25 bounds a merge by ordinary URL length, not by anything in the
+// protocol: every repeated `k1=` costs about 68 characters, and browsers,
+// servers and proxies commonly cap a whole URL near 2000. Past that the
+// request is truncated somewhere upstream, turning a large merge into a
+// malformed one rather than a clean refusal. 2000 is the conservative
+// reading of "some considerably less".
+const MAX_URL_CHARS = 2000
+
+// Splits the inputs into as few requests as fit, measuring the URL this
+// SERVICE's own callback actually produces rather than assuming a count -
+// a long callback path leaves room for fewer notes than a short one.
+// `carried` accounts for the previous batch's output, which every batch
+// after the first folds in alongside its own inputs.
+export const mergeBatches = (
+  callback: string,
+  k1s: string[],
+  budget: number = MAX_URL_CHARS
+): string[][] => {
+  const placeholder = '0'.repeat(64)
+  const fits = (candidate: string[], carried: boolean): boolean => {
+    const url = new URL(callback)
+    if (carried) url.searchParams.append('k1', placeholder)
+    for (const k1 of candidate) url.searchParams.append('k1', k1)
+    url.searchParams.append('h', placeholder)
+    return url.href.length <= budget
+  }
+  const batches: string[][] = []
+  let batch: string[] = []
+  for (const k1 of k1s) {
+    const next = [...batch, k1]
+    // A batch of one goes out whatever its length: there is nothing left
+    // to split, and refusing here would strand the note instead.
+    if (batch.length > 0 && !fits(next, batches.length > 0)) {
+      batches.push(batch)
+      batch = [k1]
+    } else batch = next
+  }
+  if (batch.length > 0) batches.push(batch)
+  return batches
+}
+
 // Merge: burn all given notes, mint one worth their sum.
 export const mergeNotes = async (
   callback: string,
@@ -624,6 +670,8 @@ export const mergeNotes = async (
   options: LnurlcashOptions = {}
 ): Promise<RotateResult> => {
   const opts = resolveOptions(options)
+  const batches = mergeBatches(callback, k1s)
+  if (batches.length > 1) return foldNotes(callback, batches, opts, options)
   const newK1 = opts.randomSecret()
   try {
     const result = await mergeNotesWithHash(callback, k1s, hashK1(newK1), options)
@@ -634,6 +682,38 @@ export const mergeNotes = async (
     }
     throw keepingOutputs(err, [newK1])
   }
+}
+
+// Folds batch into batch, each merge's output carried into the next, as
+// LUD-25 advises a WALLET holding more notes than one request can name.
+const foldNotes = async (
+  callback: string,
+  batches: string[][],
+  opts: ResolvedOptions,
+  options: LnurlcashOptions
+): Promise<RotateResult> => {
+  let carried: string | null = null
+  let signature: string | undefined
+  for (const batch of batches) {
+    const inputs = carried === null ? batch : [carried, ...batch]
+    const newK1 = opts.randomSecret()
+    try {
+      const result = await mergeNotesWithHash(callback, inputs, hashK1(newK1), options)
+      carried = newK1
+      signature = result.signature
+    } catch (err) {
+      // Unlike a single merge, a fold can fail with value already moved:
+      // `carried` names a live note holding every batch folded so far, and
+      // it exists nowhere else. It goes back with the failure whatever the
+      // failure was.
+      const live = carried === null ? [newK1] : [carried, newK1]
+      if (err instanceof AmbiguousMintError) {
+        throw new AmbiguousMutationError((err as Error).message, live)
+      }
+      throw keepingOutputs(err, live)
+    }
+  }
+  return {k1: carried as string, signature}
 }
 
 export type SettledNote = {

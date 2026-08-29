@@ -3,6 +3,27 @@
 Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may carry breaking changes; pin an exact version.
 
+## Unreleased
+
+**A large merge is folded in batches rather than sent as one over-long
+URL.** LUD-25 bounds a merge by ordinary URL length, not by anything in the
+protocol: every repeated `k1=` costs about 68 characters, and browsers,
+servers and proxies commonly cap a whole URL near 2000. Past roughly 28
+notes `mergeNotes` built a request that something upstream truncates,
+turning a large merge into a malformed one rather than a clean refusal. It
+now measures the URL this SERVICE's own callback actually produces and
+folds the inputs batch into batch, each merge's output carried into the
+next, as the draft advises.
+
+A fold can fail with value already moved, which a single merge never could:
+the carried note holds every batch folded so far and exists nowhere else.
+It is returned with the failure whatever the failure was - including the
+network errors `newSecretsOf` previously reported nothing for - so a caller
+that persists what it is handed cannot lose it.
+
+`mergeBatches(callback, k1s, budget?)` is exported for callers that want to
+show or plan the batches before committing to them.
+
 ## 0.4.0 - 2026-08-26
 
 **Breaking: `restoreNotes` asks by hash, and no longer discloses note

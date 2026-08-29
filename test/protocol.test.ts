@@ -24,6 +24,7 @@ import {
   hashK1,
   HashLookupUnsupportedError,
   meltNote,
+  mergeBatches,
   mergeNotes,
   newSecretsOf,
   NoteSpentError,
@@ -271,6 +272,60 @@ describe('split and merge', () => {
     const merged = await mergeNotes(info.callback, parts)
     for (const part of parts) expect(m.state.noteState(part)).toBe('burned')
     expect((await fetchNoteInfo(noteUrl(m, merged.k1))).maxWithdrawable).toBe(6000)
+  })
+
+  it('folds a large merge in batches rather than one over-long URL', async () => {
+    const m = await mint()
+    const parts = Array.from({length: 40}, (_, i) =>
+      secret((i + 100).toString(16).padStart(2, '0'))
+    )
+    parts.forEach(k1 => m.state.creditNote(k1, 1000))
+    const info = await fetchNoteInfo(noteUrl(m, parts[0]!))
+    const seen: string[] = []
+    const spyFetch: typeof fetch = (input, init) => {
+      seen.push(input.toString())
+      return fetch(input as string, init)
+    }
+
+    const merged = await mergeNotes(info.callback, parts, {fetch: spyFetch})
+
+    expect(Math.max(...seen.map(u => u.length))).toBeLessThanOrEqual(2000)
+    for (const part of parts) expect(m.state.noteState(part)).toBe('burned')
+    expect((await fetchNoteInfo(noteUrl(m, merged.k1))).maxWithdrawable).toBe(40000)
+  })
+
+  it('hands back the carried note when a fold fails partway', async () => {
+    const m = await mint()
+    const parts = Array.from({length: 40}, (_, i) =>
+      secret((i + 100).toString(16).padStart(2, '0'))
+    )
+    parts.forEach(k1 => m.state.creditNote(k1, 1000))
+    const info = await fetchNoteInfo(noteUrl(m, parts[0]!))
+    const batches = mergeBatches(info.callback, parts)
+    expect(batches.length).toBeGreaterThan(1)
+
+    let calls = 0
+    // The first batch lands; the network then drops. The value of that
+    // first batch is now sitting at a secret only the kit generated.
+    const flakyFetch: typeof fetch = (input, init) => {
+      if (++calls > 1) return Promise.reject(new TypeError('network down'))
+      return fetch(input as string, init)
+    }
+
+    const err = await mergeNotes(info.callback, parts, {fetch: flakyFetch}).catch(
+      e => e
+    )
+
+    const rescued = newSecretsOf(err)
+    expect(rescued.length).toBeGreaterThan(0)
+    const live = await Promise.all(
+      rescued.map(k1 =>
+        fetchNoteInfo(noteUrl(m, k1))
+          .then(i => i.maxWithdrawable)
+          .catch(() => 0)
+      )
+    )
+    expect(Math.max(...live)).toBe(batches[0]!.length * 1000)
   })
 
   it('refuses to send a mutation with no note named', async () => {
