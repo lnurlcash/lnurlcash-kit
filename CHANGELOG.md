@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-08-31
+
 - `namesMintOutput()` now requires `commentAllowed >= 64`; the additive
   `mintToHash` advertisement alone no longer authorizes minting.
+- `fetchPayRequest()` rejects a minting payRequest that cannot carry the
+  mandatory 64-character commitment, so a caller cannot proceed into an
+  invoice flow that has no conforming output name.
 - Mint requests carrying an output hash continue to send identical
   `comment` and `h` fields. Documentation now treats the former as mandatory
   LUD-25 and the latter as the Moneyer/ForgeSworn receipt extension.

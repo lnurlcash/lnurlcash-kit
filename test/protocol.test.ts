@@ -463,32 +463,30 @@ describe('melt', () => {
 })
 
 describe('minting', () => {
-  it('mints a note from a paid invoice and rotates it immediately', async () => {
+  it('mints directly at a wallet-chosen secret', async () => {
     const m = await mint()
     const pay = await fetchPayRequest(`${m.url}/.well-known/lnurlp/mint`)
     // Either legal spelling (plain URL as lnurl-mint, lnurlw:// per LUD-17)
     // resolves to the same fetchable endpoint; that is what matters here.
     expect(fromLud17(pay.withdrawLink!)).toBe(`http://127.0.0.1:${m.port}/w`)
 
-    const invoice = await requestInvoice(pay.callback, 21000)
+    const k1 = secret('44')
+    const invoice = await requestInvoice(pay.callback, 21000, {h: hashK1(k1)})
     expect(invoice.disposable).toBe(false)
 
     // pay it - the mock settles on demand, since nothing here is payable
     const paymentHash = [...m.state.invoices.keys()].at(-1)!
     const pending = m.state.invoices.get(paymentHash)!
     pending.settled = true
+    m.state.creditNote(k1, pending.amountMsat)
 
     const verified = await fetchInvoiceVerification(invoice.verify!)
     expect(verified.settled).toBe(true)
-    // the preimage IS the note secret - which the mint necessarily saw
-    const claimed = verified.preimage!
-    m.state.creditNote(claimed, 21000)
+    expect(verified.preimage).not.toBe(k1)
 
-    const info = await fetchNoteInfo(buildNoteUrl(pay.withdrawLink!, claimed))
-    const rotated = await rotateNote(info.callback, claimed)
-    // after rotating, the secret the mint generated is worthless
-    expect(m.state.noteState(claimed)).toBe('burned')
-    expect(m.state.noteState(rotated.k1)).toBe('outstanding')
+    const info = await fetchNoteInfo(buildNoteUrl(pay.withdrawLink!, k1))
+    expect(info.maxWithdrawable).toBe(21000)
+    expect(m.state.noteState(k1)).toBe('outstanding')
   })
 
   it('reads an advertised mint fee', async () => {
@@ -515,7 +513,10 @@ describe('minting', () => {
       })
     }
     await expect(
-      requestInvoice(pay.callback, 21000, {fetch: spyFetch})
+      requestInvoice(pay.callback, 21000, {
+        h: hashK1(secret('45')),
+        fetch: spyFetch
+      })
     ).rejects.toBeInstanceOf(ProtocolError)
   })
 
@@ -624,20 +625,20 @@ describe('naming the note you are buying', () => {
     expect(sent.searchParams.get('amount')).toBe('21000')
   })
 
-  it('sends no h at all when none is given, so the preimage path is unchanged', async () => {
+  it('does not invent a commitment when a non-minting caller supplies none', async () => {
     const m = await mint()
     const pay = await fetchPayRequest(`${m.url}/.well-known/lnurlp/mint`)
     const seen: string[] = []
 
-    const invoice = await requestInvoice(pay.callback, 21000, {fetch: spying(seen)})
+    await expect(
+      requestInvoice(pay.callback, 21000, {fetch: spying(seen)})
+    ).rejects.toBeInstanceOf(ServiceRejectedError)
 
     const sent = new URL(seen.at(-1)!)
     expect(sent.searchParams.has('h')).toBe(false)
     // and no empty comment either: a service reading one would have to
     // decide what a blank commitment means
     expect(sent.searchParams.has('comment')).toBe(false)
-    expect(invoice.pr).toMatch(/^lnbc/)
-    expect(invoice.mintToHash).toBe(false)
   })
 
   it('normalises the output hash to lowercase before sending it', async () => {

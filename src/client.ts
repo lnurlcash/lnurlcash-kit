@@ -819,10 +819,9 @@ export type PayRequestInfo = {
   maxSendable: number
   metadata: string
   // LUD-25: present when paying this mints a bearer note. This is the raw
-  // LUD-17 withdraw endpoint the note lives at. By default the payment
-  // preimage of the invoice becomes its k1; where the SERVICE advertises
-  // mintToHash and the WALLET sent an `h`, the note is keyed by that hash
-  // instead and the preimage is not a valid k1 at all
+  // LUD-17 withdraw endpoint the note lives at. Current-draft minting also
+  // requires commentAllowed >= 64 so the WALLET can name the output before
+  // an invoice exists; the payment preimage is settlement proof, not k1.
   withdrawLink?: string
   // Rarely present here in practice: a WALLET that pays the invoice can
   // recover the SERVICE's node id from its own BOLT-11 signature, so the
@@ -853,6 +852,18 @@ export const fetchPayRequest = async (
   }
   const mintFee =
     typeof body.metadata === 'string' ? parseMintFee(body.metadata) : null
+  const commentAllowed = asNumber(body.commentAllowed)
+  if (body.withdrawLink !== undefined && typeof body.withdrawLink !== 'string') {
+    throw new ProtocolError('A minting payRequest has an invalid withdrawLink.')
+  }
+  if (
+    typeof body.withdrawLink === 'string' &&
+    !(typeof commentAllowed === 'number' && commentAllowed >= 64)
+  ) {
+    throw new ProtocolError(
+      'A minting payRequest must allow a 64-character output commitment.'
+    )
+  }
   // The spread is how this one has always been built, so a field a SERVICE
   // adds still rides through untyped. mintToHash is mapped explicitly after
   // it, because anything that is not exactly the boolean true has to read
@@ -861,7 +872,7 @@ export const fetchPayRequest = async (
     ...body,
     mintFee: mintFee ?? undefined,
     mintToHash: asBoolean(body.mintToHash),
-    commentAllowed: asNumber(body.commentAllowed)
+    commentAllowed
   } as PayRequestInfo
 }
 
@@ -1007,19 +1018,11 @@ export type VerifyResult = {
 // LUD-21: polls whether an invoice has settled, via the URL requestInvoice
 // optionally returned.
 //
-// For LNURLcash specifically, a settled invoice's preimage IS the bearer
-// note's spend secret. A verify GET proves nothing about who is asking -
-// only that they know the payment hash embedded in the URL, which travels
-// inside the invoice itself. Anyone who saw the unpaid invoice can poll
-// this and take the note the moment it settles. A caller that receives a
-// preimage here MUST rotate immediately, and must not treat verify as
-// having closed that exposure.
-//
-// That whole race only exists because the SERVICE chose the secret. A
-// WALLET that sent an `h` with requestInvoice chose its own, and claims
-// with claimMintedNote instead; verify is then an ordinary payment proof
-// that leaks nothing. Keep this path for mints that do not offer
-// mintToHash.
+// For current-draft LNURLcash minting, the WALLET chose the note secret and
+// sent its hash as the mandatory comment. The settled preimage is therefore
+// ordinary payment proof and cannot redeem the minted note. A preimage that
+// does open a note identifies a historical/non-compliant mint quote; callers
+// recovering one of those must rotate it immediately.
 export const fetchInvoiceVerification = async (
   verifyUrl: string,
   options: LnurlcashOptions = {}
