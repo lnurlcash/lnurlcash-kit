@@ -26,6 +26,7 @@ import {
   meltNote,
   mergeBatches,
   mergeNotes,
+  namesMintOutput,
   newSecretsOf,
   NoteSpentError,
   NoteUnknownError,
@@ -54,6 +55,15 @@ const mint = async (options: Record<string, unknown> = {}): Promise<Mint> => {
 
 afterEach(async () => {
   await Promise.all(mints.splice(0).map(m => m.close()))
+})
+
+describe('current-draft mint capability', () => {
+  it('requires room for the mandatory comment and never accepts mintToHash alone', () => {
+    expect(namesMintOutput({commentAllowed: 64})).toBe(true)
+    expect(namesMintOutput({commentAllowed: 128, mintToHash: true})).toBe(true)
+    expect(namesMintOutput({mintToHash: true})).toBe(false)
+    expect(namesMintOutput({commentAllowed: 63, mintToHash: true})).toBe(false)
+  })
 })
 
 const secret = (seed: string) => bytesToHex(sha256(hexToBytes('00'.repeat(31) + seed)))

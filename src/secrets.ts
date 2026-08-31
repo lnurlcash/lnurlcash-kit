@@ -21,7 +21,8 @@ export type RandomSecret = () => string
 export const defaultRandomSecret: RandomSecret = () =>
   bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
 
-// A payment preimage, and therefore a note secret: 32 bytes hex.
+// The shared wire shape of a payment preimage or a note secret: 32 bytes
+// hex. Current minting keeps those two values distinct.
 export const isPreimage = (value: string): boolean =>
   /^[0-9a-fA-F]{64}$/.test(value.trim())
 

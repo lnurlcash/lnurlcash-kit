@@ -832,21 +832,14 @@ export type PayRequestInfo = {
   // parsed from metadata - absent means the SERVICE advertised none, which
   // the spec says to read as fee-free rather than unknown
   mintFee?: MintFee
-  // True when this SERVICE accepts an `h` on its pay callback and credits
-  // the minted note at that hash instead of at the payment preimage. This
-  // is THE place to read the capability: the payRequest is the one endpoint
-  // every mint has, it is where a WALLET already is at the moment it is
-  // about to mint, and it sits alongside withdrawLink, which the draft
-  // already hangs here for LNURLcash's sake. The same field on
-  // MintAddressInfo says the same thing and is the fallback for a SERVICE
-  // that only advertises there. Undefined means the SERVICE said nothing,
-  // which is the same as no. See requestInvoice.
+  // Additive ForgeSworn/Moneyer extension: this SERVICE accepts `h`
+  // alongside the mandatory identical LUD-25 comment and may provide bound
+  // quote/settlement receipt fields. It is not a substitute for
+  // commentAllowed.
   mintToHash?: boolean
-  // LUD-12's own field, and the spelling LUD-25 uses to advertise the same
-  // capability: the output hash rides in a `comment`, so a mint that takes
-  // one needs to allow at least the 64 characters a hex-encoded 32-byte
-  // hash costs. A SERVICE advertising either this (>= 64) or `mintToHash`
-  // will name the note; one advertising neither keys it by the preimage.
+  // LUD-12's field and the normative LUD-25 minting capability. A minting
+  // payRequest must allow the 64 characters needed for the wallet's
+  // hex-encoded SHA-256 commitment.
   commentAllowed?: number
 }
 
@@ -872,22 +865,14 @@ export const fetchPayRequest = async (
   } as PayRequestInfo
 }
 
-// Whether a SERVICE will credit the minted note at a hash the WALLET names,
-// rather than at the payment preimage. One rule in one place, because
-// getting it wrong in either direction costs a note: read it as no when the
-// SERVICE means yes and the note is the preimage, published on the verify
-// URL; read it as yes when the SERVICE means no and the WALLET waits
-// forever for a note that was minted somewhere else.
-//
-// `commentAllowed >= 64` is LUD-25's own advertisement, the room a
-// hex-encoded 32-byte hash needs in a LUD-12 comment. `mintToHash` is the
-// spelling one mint shipped before that text existed. Either will do.
+// Whether a SERVICE can create a current-draft LUD-25 note. `mintToHash`
+// alone is an additive legacy advertisement and cannot replace the
+// mandatory LUD-12 comment capacity.
 export const namesMintOutput = (info: {
   mintToHash?: boolean
   commentAllowed?: number
 }): boolean =>
-  info.mintToHash === true ||
-  (typeof info.commentAllowed === 'number' && info.commentAllowed >= 64)
+  typeof info.commentAllowed === 'number' && info.commentAllowed >= 64
 
 export type InvoiceResult = {
   pr: string
@@ -898,10 +883,9 @@ export type InvoiceResult = {
   // once paid regardless. Per spec, absent MUST be read as true, so only an
   // explicit false counts.
   disposable: boolean
-  // The SERVICE confirmed that THIS quote is bound to the `h` that was
-  // sent, so the note it mints will be keyed by that hash rather than by
-  // the payment preimage. Per quote, and the statement that matters at the
-  // moment money moves.
+  // The SERVICE confirmed the additive `h`/receipt extension for THIS
+  // quote. The mandatory comment already binds the note; this field must
+  // never be used as permission to omit it.
   //
   // False means the quote said nothing about `h`, which is NOT the same as
   // a refusal: the advertisement a WALLET decides from is `mintToHash` on
@@ -946,19 +930,10 @@ const asBoundMintCommitment = (value: unknown): BoundMintCommitment | undefined 
 }
 
 export type InvoiceRequestOptions = LnurlcashOptions & {
-  // Name the note you are buying. `h` is the sha256 of a secret the WALLET
-  // chose, exactly as `h` means on the withdraw callback, and a SERVICE
-  // that accepts it credits the minted note at `h` on settlement. The
-  // payment preimage is then no longer a valid k1 for that note.
-  //
-  // Why it matters: without `h` the preimage IS the money, and two sets of
-  // people learn it without being trusted - every routing node on the
-  // payment path, because that is how HTLC settlement works, and anyone
-  // who merely saw the invoice, because they can poll LUD-21 verify with
-  // its payment hash and take the preimage the moment it settles. A QR on
-  // a desktop screen is exactly that. Rotating the instant you claim is a
-  // race against a thief in a tight polling loop; choosing the secret
-  // yourself is not a race at all.
+  // The sha256 of the wallet-chosen mint secret. requestInvoice sends it as
+  // the mandatory LUD-12 `comment` and repeats it as the additive `h`
+  // compatibility field. The payment preimage remains settlement proof and
+  // is never the k1 of a current minted note.
   //
   // Persist the secret BEFORE calling this. Paying for a note and then
   // losing the secret is the one way this is worse than the preimage
@@ -968,13 +943,9 @@ export type InvoiceRequestOptions = LnurlcashOptions & {
   //
   // Sent as a LUD-12 `comment` of hex(h), which is how LUD-25 specifies it,
   // and as `h` for SERVICEs that took the parameter form first. Read
-  // `commentAllowed` (>= 64) or `mintToHash` off the payRequest before
-  // sending, falling back to the mint address document. A SERVICE
-  // advertising neither ignores both and keys the note by the preimage.
-  //
-  // Naming an output is what keeps the note out of the payment preimage,
-  // and therefore out of LUD-21 `verify`: an unnamed mint's k1 IS P, and a
-  // SERVICE offering verify on it hands the note to whoever holds that URL.
+  // A minting caller first requires `commentAllowed >= 64` on the
+  // payRequest. This helper then sends the same commitment as both the
+  // normative `comment` and the additive `h` field.
   //
   // Malformed input is refused here rather than sent, so a WALLET never
   // pays for a quote a SERVICE was going to reject.
@@ -998,12 +969,8 @@ export const requestInvoice = async (
     // bytes, not text, and a SERVICE storing notes under the hash it was
     // given should be given one spelling of it
     const h = options.h.trim().toLowerCase()
-    // LUD-25 names the output with a LUD-12 `comment` carrying hex(h), and
-    // that is the spelling every conforming SERVICE reads. `h` is sent
-    // alongside it for SERVICEs that adopted the parameter before the
-    // comment form was written; a SERVICE reading either gets the same
-    // hash, and one reading neither keys the note by the preimage as it
-    // always has.
+    // LUD-25 names the output with a LUD-12 comment. `h` repeats the exact
+    // same value for services that expose the additive receipt extension.
     cbUrl.searchParams.set('comment', h)
     cbUrl.searchParams.set('h', h)
   }
@@ -1141,8 +1108,8 @@ export type MintClaim = {
   //            `callback` are populated and there is nothing left to do.
   // 'unminted' the SERVICE does not recognise the secret. Either the
   //            invoice has not settled yet - poll again - or the SERVICE
-  //            ignored the `h` and keyed the note by the preimage after
-  //            all, in which case the LUD-21 verify path is the way in.
+  //            violated the mandatory comment commitment. The payment
+  //            preimage is proof, not an alternate claim secret.
   // 'pending'  the note exists with a melt in flight on it. Alive, value
   //            unstated. Retry, never read this as spent.
   // 'spent'    the note existed and is now burned. On a fresh mint that

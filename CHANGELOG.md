@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `namesMintOutput()` now requires `commentAllowed >= 64`; the additive
+  `mintToHash` advertisement alone no longer authorizes minting.
+- Mint requests carrying an output hash continue to send identical
+  `comment` and `h` fields. Documentation now treats the former as mandatory
+  LUD-25 and the latter as the Moneyer/ForgeSworn receipt extension.
+
 Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may carry breaking changes; pin an exact version.
 
