@@ -7,6 +7,9 @@
 //   AmbiguousMintError    the outcome is unknown. The request MAY have been
 //                         processed. Nothing may be assumed either way.
 //   ProtocolError         a non-mutating response did not match the spec.
+//   UnverifiableNoteError a MUTATION landed, and the SERVICE returned no
+//                         signature over it. The note exists; it just
+//                         cannot be verified offline.
 //
 // Treating an ambiguous failure as a definitive one is how wallets lose
 // money: a rotate that times out after the SERVICE burned the input has
@@ -113,6 +116,28 @@ export class HashLookupUnsupportedError extends LnurlcashError {}
 
 export class AmbiguousMintError extends LnurlcashError {}
 
+// The SERVICE confirmed a rotate, split or merge with {"status":"OK"} but
+// returned no signature over the hash it was given. LUD-25 makes offline
+// verification mandatory, so this is a non-compliant SERVICE - but the
+// mutation LANDED. The note exists, at the hash the caller disclosed, and
+// the WALLET-generated secret behind it is the only key to that value
+// anywhere.
+//
+// So this is an error about the note's VERIFIABILITY, never about its
+// existence, and it carries the secrets for the same reason
+// AmbiguousMutationError does: throwing without them would strand real
+// money to make a point about conformance. Persist them, then decide
+// whether to keep dealing with a mint that issues notes nobody can check.
+//
+// Only ever raised when `requireSignatures` is on, which is the default.
+export class UnverifiableNoteError extends LnurlcashError {
+  newSecrets: string[]
+  constructor(message: string, newSecrets: string[] = []) {
+    super(message)
+    this.newSecrets = newSecrets
+  }
+}
+
 // An AmbiguousMintError from a rotate, split or merge, carrying the fresh
 // WALLET-generated secrets whose hashes the uncertain request disclosed.
 // If the request did land, these are the only copies of the outputs the
@@ -155,6 +180,7 @@ export class InsufficientValueError extends ServiceRejectedError {
 // the first thing to do: persist these before anything else.
 export const newSecretsOf = (err: unknown): string[] => {
   if (err instanceof AmbiguousMutationError) return err.newSecrets
+  if (err instanceof UnverifiableNoteError) return err.newSecrets
   if (err instanceof ServiceRejectedError) return err.newSecrets ?? []
   return []
 }

@@ -7,6 +7,7 @@ import {
   ProtocolError,
   RequestRefusedError,
   ServiceRejectedError,
+  UnverifiableNoteError,
   classifyNoteError
 } from './errors.js'
 import {
@@ -33,7 +34,11 @@ export type WithdrawRequestInfo = {
   minWithdrawable: number
   maxWithdrawable: number
   defaultDescription?: string
-  mintPubkey?: string
+  // LUD-25 makes offline verification mandatory, so a conforming SERVICE
+  // always publishes the key its notes verify against here. Required unless
+  // the caller opts out with `requireSignatures: false`, which is the only
+  // way this arrives undefined.
+  mintPubkey: string
   // The way home. A payRequest advertises `withdrawLink`; this is the other
   // direction, so a holder who has nothing but a note can still reach the
   // document publishing this SERVICE's terms and its retired signing keys.
@@ -54,7 +59,20 @@ export type WithdrawRequestInfo = {
 // secret, where the spec makes the echo a MUST, and absent on a lookup by
 // hash, where the spec omits it: a WALLET asking by hash already holds the
 // value it hashed, so there is nothing for the SERVICE to hand back.
-const assertWithdrawRequestShape = (body: any, {requireK1}: {requireK1: boolean}): void => {
+// A compressed secp256k1 point: 33 bytes hex, and the leading byte says
+// which of the two y values the x coordinate stands for. Checked at the
+// door because a `mintPubkey` that is not one verifies nothing, and a
+// SERVICE publishing a node URI or an x-only key here is a failure worth
+// naming at the response rather than at the first signature check.
+const COMPRESSED_PUBKEY = /^0[23][0-9a-f]{64}$/
+
+export const isCompressedPubkey = (value: unknown): value is string =>
+  typeof value === 'string' && COMPRESSED_PUBKEY.test(value.trim().toLowerCase())
+
+const assertWithdrawRequestShape = (
+  body: any,
+  {requireK1, requireMintPubkey}: {requireK1: boolean; requireMintPubkey: boolean}
+): void => {
   if (
     body?.tag !== 'withdrawRequest' ||
     typeof body.callback !== 'string' ||
@@ -69,6 +87,17 @@ const assertWithdrawRequestShape = (body: any, {requireK1}: {requireK1: boolean}
         body.minWithdrawable > body.maxWithdrawable))
   ) {
     throw new ProtocolError('Not a withdrawRequest (unexpected response).')
+  }
+  // Separate from the shape check above, and separately worded: this
+  // response IS a withdrawRequest, it just describes a note nobody can
+  // check offline. Telling a caller it "is not a withdrawRequest" would
+  // send them looking for the wrong fault.
+  if (requireMintPubkey && !isCompressedPubkey(body.mintPubkey)) {
+    throw new ProtocolError(
+      body.mintPubkey === undefined
+        ? 'This service publishes no mintPubkey, so its notes cannot be verified offline (LUD-25 requires one).'
+        : 'This service published a mintPubkey that is not a 33-byte compressed secp256k1 key.'
+    )
   }
 }
 
@@ -95,7 +124,10 @@ export const fetchNoteInfo = async (
     if (err instanceof ServiceRejectedError) throw classifyNoteError(err.reason)
     throw err
   }
-  assertWithdrawRequestShape(body, {requireK1: true})
+  assertWithdrawRequestShape(body, {
+    requireK1: true,
+    requireMintPubkey: opts.requireSignatures
+  })
   // Spec MUST: the response's k1 is the bearer secret itself, never a
   // derived or opaque id. A SERVICE returning something else for the k1 it
   // was queried with is non-compliant - or the note was rotated by
@@ -142,7 +174,10 @@ export const fetchNoteInfoByHash = async (
     if (err instanceof ServiceRejectedError) throw classifyNoteError(err.reason)
     throw err
   }
-  assertWithdrawRequestShape(body, {requireK1: false})
+  assertWithdrawRequestShape(body, {
+    requireK1: false,
+    requireMintPubkey: opts.requireSignatures
+  })
   // No echo check to make: there is no queried k1 to compare against. A
   // SERVICE that sends one anyway is not refused - it is telling the caller
   // a secret the caller already holds, which costs nothing - but nothing
@@ -419,6 +454,67 @@ const callbackRequest = async (
   return body as WithdrawSuccessResponse
 }
 
+// The same request, re-sent when the transport lost the answer.
+//
+// LUD-25's "Retrying a mutation" makes this safe and makes it useful: a
+// SERVICE MUST answer a byte-identical rotate, split or merge with the
+// success it returned the first time, sig and all, rather than with the
+// already-spent refusal the burned inputs would otherwise earn. So a second
+// attempt turns "we don't know" into an answer, and a SERVICE that refuses
+// to replay leaves the caller exactly where giving up would have - holding
+// the same secrets, with the same uncertainty, and the same instruction to
+// go and ask what the note at each hash is worth.
+//
+// `params` is reused verbatim, never rebuilt, because the replay is matched
+// on the k1 set, h, h2 and amount. Regenerating a secret between attempts
+// would make the retry a DIFFERENT mutation, and a second real burn is the
+// one outcome this must never produce.
+//
+// Only ambiguity is retried. A definitive refusal - spent, unknown,
+// pending, a policy no - is the SERVICE's considered answer, and asking
+// again cannot improve it.
+const replayableCallbackRequest = async (
+  callback: string,
+  params: [string, string][],
+  options: LnurlcashOptions
+): Promise<WithdrawSuccessResponse> => {
+  const {mutationRetries} = resolveOptions(options)
+  let lastError: unknown
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callbackRequest(callback, params, options)
+    } catch (err) {
+      if (!(err instanceof AmbiguousMintError) || attempt >= mutationRetries) {
+        throw err
+      }
+      lastError = err
+    }
+  }
+  // unreachable: the loop either returns or throws
+  throw lastError
+}
+
+// Every mutation the replay rule covers returns a signature over the hash
+// it was given, and LUD-25 no longer lets a SERVICE opt out of that. The
+// mutation has already landed by the time this is checked - `status` was
+// OK - so the refusal has to carry the caller's secrets out with it, or
+// enforcing the spec would be the thing that loses the money.
+//
+// `newSecrets` is left empty here and filled in by whoever generated them:
+// the *WithHash entry points take a hash from a caller who still holds the
+// secret behind it, and have nothing to hand back.
+const requireSignature = (
+  value: unknown,
+  options: LnurlcashOptions,
+  what: string
+): string | undefined => {
+  if (typeof value === 'string' && value.length > 0) return value
+  if (!resolveOptions(options).requireSignatures) return undefined
+  throw new UnverifiableNoteError(
+    `The service confirmed the ${what} but returned no signature, so the note it just minted cannot be verified offline. The note exists - keep the secret.`
+  )
+}
+
 export type MeltResult = {
   // LUD-25 melt proof (optional): a LUD-21 style URL proving this exact
   // outgoing payment settled. Absent unless the SERVICE advertises it.
@@ -474,7 +570,7 @@ export const rotateNoteWithHash = async (
   h: string,
   options: LnurlcashOptions = {}
 ): Promise<HashedMutationResult> => {
-  const body = await callbackRequest(
+  const body = await replayableCallbackRequest(
     callback,
     [
       ['k1', k1],
@@ -482,7 +578,7 @@ export const rotateNoteWithHash = async (
     ],
     options
   )
-  return {signature: body.sig}
+  return {signature: requireSignature(body.sig, options, 'rotate')}
 }
 
 export type HashedSplitResult = {
@@ -498,7 +594,7 @@ export const splitNoteWithHash = async (
   h2: string,
   options: LnurlcashOptions = {}
 ): Promise<HashedSplitResult> => {
-  const body = await callbackRequest(
+  const body = await replayableCallbackRequest(
     callback,
     [
       ...k1s.map((k1): [string, string] => ['k1', k1]),
@@ -508,7 +604,12 @@ export const splitNoteWithHash = async (
     ],
     options
   )
-  return {signature: body.sig, changeSignature: body.sig2}
+  // Both outputs of a split are notes, and both need a signature. Checked
+  // in output order so the message names the one actually missing.
+  return {
+    signature: requireSignature(body.sig, options, 'split'),
+    changeSignature: requireSignature(body.sig2, options, "split's change")
+  }
 }
 
 export const mergeNotesWithHash = async (
@@ -517,12 +618,12 @@ export const mergeNotesWithHash = async (
   h: string,
   options: LnurlcashOptions = {}
 ): Promise<HashedMutationResult> => {
-  const body = await callbackRequest(
+  const body = await replayableCallbackRequest(
     callback,
     [...k1s.map((k1): [string, string] => ['k1', k1]), ['h', h]],
     options
   )
-  return {signature: body.sig}
+  return {signature: requireSignature(body.sig, options, 'merge')}
 }
 
 // ---- the generating primitives ----
@@ -540,6 +641,13 @@ export const mergeNotesWithHash = async (
 // anything and a caller may discard its staged records at once.
 const keepingOutputs = <T,>(err: T, newSecrets: string[]): T => {
   if (err instanceof NoteSpentError || err instanceof NoteUnknownError) {
+    err.newSecrets = newSecrets
+  }
+  // Not one of those two, and not ambiguous either: the mutation landed and
+  // said so, and is being refused only for arriving unverifiable. The
+  // secrets matter MORE here than in the ambiguous case, because here the
+  // note is known to exist.
+  if (err instanceof UnverifiableNoteError) {
     err.newSecrets = newSecrets
   }
   return err
@@ -749,6 +857,13 @@ const foldNotes = async (
       // and the class itself is preserved: a caller distinguishing pending
       // from spent still can.
       if (err instanceof ServiceRejectedError) {
+        err.newSecrets = live
+        throw err
+      }
+      // Same reasoning, and the class is worth keeping rather than
+      // flattening into ambiguity: this batch demonstrably landed, so a
+      // caller is being told about verifiability, not about uncertainty.
+      if (err instanceof UnverifiableNoteError) {
         err.newSecrets = live
         throw err
       }

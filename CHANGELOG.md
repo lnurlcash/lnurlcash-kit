@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-04
+
+**Offline verification is mandatory, and this library now insists on it.**
+LUD-25 stopped treating a note signature as optional: a SERVICE MUST
+publish `mintPubkey` and MUST sign every note a rotate, split or merge
+mints. A wallet that quietly accepted unsigned notes was handing its holder
+something nobody downstream could check, which is exactly the gap offline
+verification exists to close.
+
+- `fetchNoteInfo` and `fetchNoteInfoByHash` refuse a `withdrawRequest` that
+  publishes no `mintPubkey`, or one that is not a 33-byte compressed
+  secp256k1 key. `WithdrawRequestInfo.mintPubkey` is typed as present.
+- `rotateNote`, `splitNote`, `mergeNotes` and their `*WithHash` forms throw
+  the new `UnverifiableNoteError` when the SERVICE confirms the mutation but
+  returns no `sig` (or no `sig2` on a split's change).
+- **That error carries the secrets.** The mutation landed - `status` was OK -
+  so the note exists at the hash the wallet disclosed and its secret is the
+  only key to that value. `newSecretsOf()` reads them exactly as it reads
+  them off an ambiguous mutation. Enforcing conformance must never be the
+  thing that destroys the money.
+- `requireSignatures: false` opts out, for a mint that predates the
+  requirement. One option, stated once, at the call site that needs it.
+
+**A mutation whose answer was lost is now re-sent, and usually completes.**
+LUD-25 gained a "Retrying a mutation" section: a SERVICE MUST answer a
+byte-identical rotate, split or merge with the success it already returned,
+signature and all, rather than with the already-spent refusal its burned
+inputs would otherwise earn.
+
+That closes the sharpest edge in the protocol. Every mutation is a GET,
+HTTP treats GET as idempotent, and stacks retry one whose connection
+dropped - browsers on a stale keep-alive, Go's `net/http` on a reused
+connection, the JDK's `HttpClient` with no way to switch it off. The mint
+saw the request twice, answered the second as already spent, and the wallet
+was told a mutation had not happened while a note sat at the hash it had
+disclosed. Now the second answer is the first one.
+
+- `mutationRetries` defaults to 1. Set 0 for the previous behaviour.
+- Only rotate, split and merge. A melt is **never** retried: it carries
+  `pr`, is paid out asynchronously, and the replay rule does not cover it.
+- Only an ambiguous failure is retried. A definitive refusal is the
+  SERVICE's considered answer and asking again cannot improve it.
+- The retry re-sends the identical request rather than rebuilding it. The
+  replay is matched on the k1 set, `h`, `h2` and `amount`, so a freshly
+  generated secret would make the second attempt a different mutation - and
+  a second real burn.
+
+Against a SERVICE that has not implemented the replay rule, retrying leaves
+a caller exactly where giving up would have: the same secrets on the same
+error, and the same instruction to go and ask what the note at each hash is
+worth.
+
+Requires `lnurlcash-conformance` 0.6.0, whose vectors carry the same MUSTs.
+
 ## 0.6.0 - 2026-08-31
 
 - `namesMintOutput()` now requires `commentAllowed >= 64`; the additive

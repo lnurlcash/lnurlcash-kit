@@ -16,6 +16,31 @@ export type LnurlcashOptions = {
   // Where replacement note secrets come from. Substitute for a hardware
   // RNG, or for deterministic tests. See secrets.ts.
   randomSecret?: RandomSecret
+  // LUD-25 makes offline verification mandatory: a SERVICE MUST publish
+  // `mintPubkey` on its withdrawRequest and MUST return `sig` (and `sig2`
+  // on a split) from every rotate, split and merge. On by default, so a
+  // mint that issues notes nobody can verify offline is a loud failure
+  // rather than a silent downgrade.
+  //
+  // Set false only to talk to a SERVICE that predates the requirement, and
+  // only knowing what it costs: an unsigned note cannot be checked by
+  // whoever it is handed to, so accepting one offline is the leap of faith
+  // the signature exists to remove.
+  requireSignatures?: boolean
+  // How many times to re-send a rotate, split or merge whose outcome the
+  // transport lost. LUD-25 requires a SERVICE to answer a byte-identical
+  // retry with the original success ("Retrying a mutation"), so re-sending
+  // resolves the ambiguity rather than compounding it: a compliant SERVICE
+  // replays, and one that refuses leaves the caller exactly where an
+  // un-retried failure would have.
+  //
+  // Only ever applied to the hash-disclosing mutations, which are the ones
+  // the replay rule covers. A melt is never retried: it carries `pr`, is
+  // paid out asynchronously, and has no replay guarantee at all.
+  //
+  // Defaults to 1. Zero restores the pre-0.7 behaviour of giving up on the
+  // first ambiguous answer.
+  mutationRetries?: number
 }
 
 export type ResolvedOptions = Required<Omit<LnurlcashOptions, 'fetch'>> & {
@@ -31,8 +56,19 @@ export const resolveOptions = (options: LnurlcashOptions = {}): ResolvedOptions 
   fetch: options.fetch ?? ((...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args)),
   timeoutMs: options.timeoutMs ?? 30_000,
   offline: options.offline ?? false,
-  randomSecret: options.randomSecret ?? defaultRandomSecret
+  randomSecret: options.randomSecret ?? defaultRandomSecret,
+  requireSignatures: options.requireSignatures ?? true,
+  // A negative or non-finite count is read as none rather than thrown on:
+  // this is a resilience knob, and refusing the whole operation over it
+  // would be a worse answer than not retrying.
+  mutationRetries: normaliseRetries(options.mutationRetries)
 })
+
+const normaliseRetries = (value: number | undefined): number => {
+  if (value === undefined) return 1
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.floor(value)
+}
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 

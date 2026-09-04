@@ -14,6 +14,7 @@ import {
   ProtocolError,
   RequestRefusedError,
   ServiceRejectedError,
+  UnverifiableNoteError,
   fetchInvoiceVerification,
   fetchMintAddress,
   fetchNoteInfo,
@@ -24,6 +25,7 @@ import {
   mergeNotesWithHash,
   requestInvoice,
   requireBoundMintQuote,
+  rotateNote,
   rotateNoteWithHash,
   splitNote,
   splitNoteWithHash,
@@ -46,9 +48,14 @@ const jsonFetch = (body: unknown, status = 200): typeof fetch =>
 const rawFetch = (body: string, status = 200): typeof fetch =>
   async () => new Response(body, {status})
 
+// A conforming mutation answer. Both signatures are present because the
+// same stub answers a split, and LUD-25 requires one over each output; a
+// bare {"status":"OK"} is the unverifiable case, which has its own tests.
+const MUTATION_OK = {status: 'OK', sig: 'ab'.repeat(65), sig2: 'cd'.repeat(65)}
+
 const capturingFetch = (seen: string[]): typeof fetch => async input => {
   seen.push(input.toString())
-  return new Response(JSON.stringify({status: 'OK'}), {
+  return new Response(JSON.stringify(MUTATION_OK), {
     headers: {'content-type': 'application/json'}
   })
 }
@@ -83,6 +90,69 @@ describe('callback request vectors', () => {
       )
     })
   }
+
+  // The replay rule is matched on the k1 set, h, h2 and amount, so a retry
+  // is only a retry if it repeats them exactly. Regenerating a secret
+  // between attempts would make the second request a DIFFERENT mutation,
+  // and against a mint that had already applied the first it would be a
+  // second real burn - the one outcome retrying must never produce.
+  it('re-sends a mutation byte for byte, never a fresh one', async () => {
+    const seen: string[] = []
+    let attempts = 0
+    await rotateNote('https://mint.example/w/cb', 'a'.repeat(64), {
+      fetch: async input => {
+        seen.push(input.toString())
+        if (++attempts === 1) throw new TypeError('connection reset')
+        return new Response(JSON.stringify(MUTATION_OK), {
+          headers: {'content-type': 'application/json'}
+        })
+      }
+    })
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toBe(seen[0])
+  })
+
+  // A melt is the one mutation the replay rule does not cover: it carries
+  // `pr`, it is paid out asynchronously after the OK, and a SERVICE has
+  // made no promise about what a second identical request means. Re-sending
+  // one could ask for a second payment, so it is never retried whatever
+  // mutationRetries says.
+  it('never re-sends a melt', async () => {
+    const seen: string[] = []
+    const err = await meltNote(
+      'https://mint.example/w/cb',
+      'a'.repeat(64),
+      'lnbc210n1pjq',
+      {
+        fetch: async input => {
+          seen.push(input.toString())
+          throw new TypeError('connection reset')
+        },
+        mutationRetries: 5
+      }
+    ).catch(e => e)
+    expect(err).toBeInstanceOf(AmbiguousMintError)
+    expect(seen).toHaveLength(1)
+  })
+
+  // The retry is for lost answers, not for answers the caller dislikes. A
+  // SERVICE that has considered the request and refused it will refuse it
+  // again, and asking repeatedly is just noise on somebody's mint.
+  it('never re-sends a mutation the service definitively refused', async () => {
+    const seen: string[] = []
+    const err = await rotateNote('https://mint.example/w/cb', 'a'.repeat(64), {
+      fetch: async input => {
+        seen.push(input.toString())
+        return new Response(
+          JSON.stringify({status: 'ERROR', reason: 'Note already spent.'}),
+          {headers: {'content-type': 'application/json'}}
+        )
+      },
+      mutationRetries: 5
+    }).catch(e => e)
+    expect(err).toBeInstanceOf(NoteSpentError)
+    expect(seen).toHaveLength(1)
+  })
 
   // The remaining rejected vectors - a melt with several k1, a melt with an
   // amount, a rotate with no h, a split with no h2 - are not expressible
@@ -231,38 +301,59 @@ describe('response classification vectors', () => {
   const H = 'b'.repeat(64)
   const CB = 'https://mint.example/w/cb'
 
+  // The vectors say which call each case is driven through, and it matters:
+  // a melt mints nothing, so it has no signature to return and none is
+  // required, while a rotate answering without one is its own outcome.
+  // Retries are off so one case is one request - the replay behaviour has
+  // its own tests.
+  const call = (c: any, fetch: typeof globalThis.fetch) => {
+    const opts = {fetch, mutationRetries: 0}
+    if (c.op === 'melt') return meltNote(CB, K1, 'lnbc210n1pjq', opts)
+    if (c.op === 'split') {
+      return splitNoteWithHash(CB, [K1], 5000, H, 'c'.repeat(64), opts)
+    }
+    return rotateNoteWithHash(CB, K1, H, opts)
+  }
+
   const drive = (c: any) => {
     if (c.transportError) {
-      return rotateNoteWithHash(CB, K1, H, {
-        fetch: async () => {
-          throw new TypeError('network error')
-        }
+      return call(c, async () => {
+        throw new TypeError('network error')
       })
     }
     if (c.timeout) {
-      return rotateNoteWithHash(CB, K1, H, {
-        fetch: async () => {
-          const err = new Error('timed out')
-          err.name = 'TimeoutError'
-          throw err
-        }
+      return call(c, async () => {
+        const err = new Error('timed out')
+        err.name = 'TimeoutError'
+        throw err
       })
     }
-    const stub =
+    return call(
+      c,
       c.bodyRaw !== undefined
         ? rawFetch(c.bodyRaw, c.http)
         : jsonFetch(c.body, c.http)
-    return rotateNoteWithHash(CB, K1, H, {fetch: stub})
+    )
   }
 
   for (const c of vectors.cases) {
     it(`classifies as ${c.expect}: ${c.name}`, async () => {
       if (c.expect === 'ok') {
-        const result = await drive(c)
+        const result: any = await drive(c)
         if (c.signature) expect(result.signature).toBe(c.signature)
+        if (c.changeSignature) {
+          expect(result.changeSignature).toBe(c.changeSignature)
+        }
         return
       }
       const err = await drive(c).catch(e => e)
+      // A landed mutation nobody can verify. Its own class, because the
+      // note exists: treating it as a refusal is how the secret gets
+      // thrown away.
+      if (c.expect === 'unverifiable') {
+        expect(err).toBeInstanceOf(UnverifiableNoteError)
+        return
+      }
       if (c.expect === 'pending') expect(err).toBeInstanceOf(PendingNoteError)
       else if (c.expect === 'spent') expect(err).toBeInstanceOf(NoteSpentError)
       else if (c.expect === 'unknown') expect(err).toBeInstanceOf(NoteUnknownError)
@@ -411,7 +502,12 @@ describe('transport discipline', () => {
   const K1 = 'a'.repeat(64)
   const H = 'b'.repeat(64)
   const CB = 'https://mint.example/w/cb'
-  const OK = JSON.stringify({status: 'OK'})
+  const OK = JSON.stringify(MUTATION_OK)
+  // These cases are about which URLs the library will follow, and the count
+  // of requests is the assertion. Retrying a mutation is a separate
+  // behaviour with its own tests, and leaving it on here would make every
+  // count a statement about both.
+  const noRetry = {mutationRetries: 0}
 
   // First request 302s to `target`; anything reached afterwards answers OK.
   const redirectFetch = (target: string, seen: string[]): typeof fetch =>
@@ -442,7 +538,8 @@ describe('transport discipline', () => {
   it('refuses to follow a redirect onto cleartext', async () => {
     const seen: string[] = []
     const err = await rotateNoteWithHash(CB, K1, H, {
-      fetch: redirectFetch('http://mint2.example/w/cb', seen)
+      fetch: redirectFetch('http://mint2.example/w/cb', seen),
+      ...noRetry
     }).catch(e => e)
     expect(err).toBeInstanceOf(AmbiguousMintError)
     expect(seen).toHaveLength(1)
@@ -451,7 +548,8 @@ describe('transport discipline', () => {
   it('refuses to follow a redirect to a non-http scheme', async () => {
     const seen: string[] = []
     const err = await rotateNoteWithHash(CB, K1, H, {
-      fetch: redirectFetch('data:application/json,{"status":"OK"}', seen)
+      fetch: redirectFetch('data:application/json,{"status":"OK"}', seen),
+      ...noRetry
     }).catch(e => e)
     expect(err).toBeInstanceOf(AmbiguousMintError)
     expect(seen).toHaveLength(1)
@@ -466,7 +564,8 @@ describe('transport discipline', () => {
           status: 302,
           headers: {location: 'https://mint.example/loop'}
         })
-      }
+      },
+      ...noRetry
     }).catch(e => e)
     expect(err).toBeInstanceOf(AmbiguousMintError)
     expect(seen.length).toBeLessThanOrEqual(7)

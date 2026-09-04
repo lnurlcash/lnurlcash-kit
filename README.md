@@ -58,14 +58,15 @@ console.log(info.maxWithdrawable, 'msat')
 // that GET put the secret on the wire, so rotate it
 const fresh = await rotateNote(info.callback, info.k1)
 
-// and check the mint really issued it, without asking anyone
-if (info.mintPubkey && fresh.signature) {
-  verifyNoteSignature(fresh.k1, info.maxWithdrawable, fresh.signature, info.mintPubkey)
-}
+// and check the mint really issued it, without asking anyone. Both fields
+// are guaranteed here: LUD-25 requires the mint to publish mintPubkey and
+// to sign what it mints, and this library refuses a mint that does neither.
+verifyNoteSignature(fresh.k1, info.maxWithdrawable, fresh.signature!, info.mintPubkey)
 ```
 
 Every request function takes options last — `fetch`, `timeoutMs`, `offline`,
-`randomSecret`. `createClient(options)` binds one set once:
+`randomSecret`, `requireSignatures`, `mutationRetries`.
+`createClient(options)` binds one set once:
 
 ```ts
 const client = createClient({timeoutMs: 10_000})
@@ -107,23 +108,39 @@ try {
 
 `RequestRefusedError` is the opposite and safe: nothing left the process.
 
-**3. Your HTTP stack must not retry.** Every mutation is a GET, HTTP treats GET
-as idempotent, and an LNURLcash mutation is not — the first attempt burns the
-input. A retried mutation is answered "already spent", which reads as a
-*definitive* rejection, so the fresh secret gets discarded along with the note
-the service just minted. Node's `fetch` does not retry on its own, but a
-browser will resend an idempotent request that failed on a stale pooled
-connection, and any retry wrapper, service worker or proxy in front of this
-will do the same. If you pass your own `fetch`, do not make it retry these.
-
-This is not hypothetical: the same hazard broke the
+**3. A retried mutation is now a replay, not a double spend.** Every mutation
+is a GET, HTTP treats GET as idempotent, and an LNURLcash mutation is not —
+the first attempt burns the input. For most of this draft's life that was the
+sharpest edge in the protocol: a stack that resent a dropped GET got "already
+spent" for the second attempt, which reads as a *definitive* rejection, so the
+fresh secret got discarded along with the note the service had just minted.
+Node's `fetch` does not retry on its own, but a browser resends an idempotent
+request that failed on a stale pooled connection, and Go and the JDK do the
+same by their own routes — the hazard broke the
 [Kotlin](https://github.com/TheCryptoDonkey/lnurlcash-kotlin) and
 [Go](https://github.com/TheCryptoDonkey/lnurlcash-go) siblings during
-development, by two different mechanisms, and is now a named scenario in the
-conformance vectors.
+development, by two different mechanisms.
 
-Because a retry cannot always be prevented, a mutation refused with the
-input already spent or unknown carries its outputs anyway:
+LUD-25 closed it. A service MUST answer a byte-identical rotate, split or
+merge with the success it already returned, signature and all. So this library
+re-sends one whose answer was lost, and an unstoppable transport retry is now
+simply invisible:
+
+```ts
+// the connection dropped after the mint applied this. It completes anyway.
+const fresh = await rotateNote(callback, oldK1)
+```
+
+`mutationRetries` sets how many times (default 1; `0` restores the old
+give-up-at-once behaviour). Only rotate, split and merge are re-sent — never a
+melt, which carries `pr`, is paid asynchronously and has no replay guarantee —
+and only an ambiguous failure, never a refusal the service actually
+considered. The re-sent request is byte-identical, because the replay is
+matched on the k1 set, `h`, `h2` and `amount`.
+
+A service that has not implemented the rule answers the second attempt as
+already spent, exactly as before. So the old defence stays: a mutation refused
+with the input already spent or unknown carries its outputs anyway:
 
 ```ts
 try {
@@ -161,14 +178,23 @@ do not mint. Existing notes still redeem through ordinary LUD-03.
 
 ## Offline verification
 
-A service may sign each note with its Lightning node identity key, so a
-holder can confirm issuer and amount with nothing but the note:
+Mandatory, and enforced here. A service MUST publish `mintPubkey` and MUST
+sign every note a rotate, split or merge mints, so a holder can confirm
+issuer and amount with nothing but the note:
 
 ```
 message = "LNURLcash:" || amount_msat || ":" || hex(sha256(k1))
 digest  = sha256(sha256("Lightning Signed Message:" || message))
 sig     = 65 bytes, r || s || recovery_id
 ```
+
+A `withdrawRequest` publishing no `mintPubkey`, or one that is not a 33-byte
+compressed secp256k1 key, is refused with a `ProtocolError`. A mutation the
+service confirms but does not sign raises `UnverifiableNoteError` — which
+**carries the fresh secrets**, because the mutation landed and the note it
+minted is real; read them with `newSecretsOf` and persist them before
+anything else. Pass `requireSignatures: false` to deal with a mint that
+predates the requirement.
 
 `verifyNoteSignature` recovers the pubkey and compares it to `mintPubkey`.
 It accepts the recovery id at either end, because lnurl-mint once emitted
