@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-04
+
 **LUD-25's own derivation, and it is now the one to mint under.** The draft's
 "Seed-recoverable note secrets" section specifies a BIP-32 scheme under
 `m/139'`, and the reference wallet implements it. This kit had shipped its own
@@ -71,8 +73,9 @@ recovery work - the scan is the fallback. That counter is not secret, so it
 belongs in an ordinary backup, and a restore should merge counters upwards
 only. Documented on `RestoreOptions.start`, in the README and in `llms.txt`.
 
-Wants `lnurlcash-conformance` with `cash-derivation.json`, whose cases this
-suite runs as soon as they are published.
+Graded against `lnurlcash-conformance` 0.7.0, whose `cash-derivation.json`
+cases this suite now runs: the LUD-25 path, the four domain levels per host,
+the hardened-by-magnitude flags, and BIP-32's own published test vector 1.
 
 ## 0.7.0 - 2026-09-04
 
