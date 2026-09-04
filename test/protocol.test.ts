@@ -38,6 +38,7 @@ import {
   restoreNotes,
   rotateNote,
   ServiceRejectedError,
+  UnverifiableNoteError,
   serverOf,
   settleNote,
   splitNote,
@@ -216,12 +217,36 @@ describe('rotate', () => {
     ).toBe(true)
   })
 
-  it('works against a service that issues no signatures at all', async () => {
+  // Offline verification stopped being optional in the current draft, so a
+  // SERVICE that issues no signatures is non-compliant rather than merely
+  // basic. The refusal has to be the loud kind - but the rotate LANDED, and
+  // the fresh secret is the only key to the note it minted, so the error
+  // carries it out. Discarding it here would be the library destroying real
+  // money to make a point about conformance.
+  it('refuses an unsigned rotate without losing the note it minted', async () => {
     const m = await mint({signatures: false})
     const k1 = secret('13')
     m.state.creditNote(k1, 21000)
     const info = await fetchNoteInfo(noteUrl(m, k1))
-    const rotated = await rotateNote(info.callback, k1)
+    const err = await rotateNote(info.callback, k1).catch(e => e)
+    expect(err).toBeInstanceOf(UnverifiableNoteError)
+    const kept = newSecretsOf(err)
+    expect(kept).toHaveLength(1)
+    // the note the caller was refused is real, outstanding, and reachable
+    // with nothing but the secret the error handed back
+    expect(m.state.noteState(kept[0]!)).toBe('outstanding')
+  })
+
+  // The same mint, for a caller who has decided to deal with it anyway.
+  // One option, stated once, and the note comes back unsigned - which is
+  // exactly what it is.
+  it('still works against an unsigned service when the caller opts out', async () => {
+    const m = await mint({signatures: false})
+    const k1 = secret('15')
+    m.state.creditNote(k1, 21000)
+    const opts = {requireSignatures: false}
+    const info = await fetchNoteInfo(noteUrl(m, k1), opts)
+    const rotated = await rotateNote(info.callback, k1, opts)
     expect(rotated.signature).toBeUndefined()
     expect(m.state.noteState(rotated.k1)).toBe('outstanding')
   })
@@ -852,13 +877,49 @@ describe('naming the note you are buying', () => {
 })
 
 describe('ambiguous outcomes', () => {
-  it('preserves the fresh secret when a rotate\'s answer is lost', async () => {
+  // The mutation landed and the answer was lost on the way back. LUD-25
+  // now requires the SERVICE to answer the identical request again with the
+  // success it already gave, so simply asking a second time turns this from
+  // an unresolved maybe into a completed rotate. The caller never sees an
+  // error at all.
+  it('completes a rotate whose answer was lost, by asking again', async () => {
     const m = await mint({dropAfterMutation: true})
     const k1 = secret('50')
     m.state.creditNote(k1, 21000)
-    const callback = `${m.url}/w/cb`
 
-    const err = await rotateNote(callback, k1).catch(e => e)
+    const rotated = await rotateNote(`${m.url}/w/cb`, k1)
+    expect(m.state.noteState(k1)).toBe('burned')
+    expect(m.state.noteState(rotated.k1)).toBe('outstanding')
+    expect((await fetchNoteInfo(noteUrl(m, rotated.k1))).maxWithdrawable).toBe(21000)
+    // the replay carries the same signature the lost answer did, so the
+    // recovered note is as verifiable as one whose first answer arrived
+    expect(rotated.signature).toBeDefined()
+  })
+
+  it('completes a split whose answer was lost, both outputs intact', async () => {
+    const m = await mint({dropAfterMutation: true})
+    const k1 = secret('51')
+    m.state.creditNote(k1, 21000)
+
+    const split = await splitNote(`${m.url}/w/cb`, [k1], 5000)
+    expect((await fetchNoteInfo(noteUrl(m, split.k1))).maxWithdrawable).toBe(5000)
+    expect((await fetchNoteInfo(noteUrl(m, split.change))).maxWithdrawable).toBe(16000)
+    expect(split.signature).toBeDefined()
+    expect(split.changeSignature).toBeDefined()
+  })
+
+  // The same dropped answer, with the retry turned off: this is the shape
+  // every caller saw before the replay rule, and it still has to work.
+  // Nothing about asking again removes the obligation to carry the secrets
+  // when the library stops asking.
+  it('preserves the fresh secret when a rotate\'s answer is lost and nothing retries', async () => {
+    const m = await mint({dropAfterMutation: true})
+    const k1 = secret('80')
+    m.state.creditNote(k1, 21000)
+
+    const err = await rotateNote(`${m.url}/w/cb`, k1, {mutationRetries: 0}).catch(
+      e => e
+    )
     expect(err).toBeInstanceOf(AmbiguousMutationError)
     expect(err.newSecrets).toHaveLength(1)
 
@@ -872,15 +933,32 @@ describe('ambiguous outcomes', () => {
 
   it('preserves both secrets when a split\'s answer is lost, in output order', async () => {
     const m = await mint({dropAfterMutation: true})
-    const k1 = secret('51')
+    const k1 = secret('81')
     m.state.creditNote(k1, 21000)
 
-    const err = await splitNote(`${m.url}/w/cb`, [k1], 5000).catch(e => e)
+    const err = await splitNote(`${m.url}/w/cb`, [k1], 5000, {
+      mutationRetries: 0
+    }).catch(e => e)
     expect(err).toBeInstanceOf(AmbiguousMutationError)
     expect(err.newSecrets).toHaveLength(2)
     const [split, change] = err.newSecrets
     expect((await fetchNoteInfo(noteUrl(m, split))).maxWithdrawable).toBe(5000)
     expect((await fetchNoteInfo(noteUrl(m, change))).maxWithdrawable).toBe(16000)
+  })
+
+  // A SERVICE that refuses to replay leaves the caller exactly where not
+  // retrying would have: the same secrets, the same instruction to go and
+  // ask what the note at each hash is worth. Retrying costs nothing against
+  // a mint that has not caught up.
+  it('leaves the caller no worse off against a mint that will not replay', async () => {
+    const m = await mint({dropAfterMutation: true, retriedMutation: 'refuse'})
+    const k1 = secret('82')
+    m.state.creditNote(k1, 21000)
+
+    const err = await rotateNote(`${m.url}/w/cb`, k1).catch(e => e)
+    const rescued = newSecretsOf(err)
+    expect(rescued).toHaveLength(1)
+    expect(m.state.noteState(rescued[0]!)).toBe('outstanding')
   })
 
   it('probes a burned input to resolve the ambiguity', async () => {
@@ -906,9 +984,23 @@ describe('ambiguous outcomes', () => {
     const m = await mint({unconfirmedMutation: true})
     const k1 = secret('54')
     m.state.creditNote(k1, 21000)
-    const err = await rotateNote(`${m.url}/w/cb`, k1).catch(e => e)
+    const err = await rotateNote(`${m.url}/w/cb`, k1, {
+      mutationRetries: 0
+    }).catch(e => e)
     expect(err).toBeInstanceOf(AmbiguousMutationError)
     expect(m.state.noteState(k1)).toBe('burned')
+  })
+
+  // The same mint, asked twice. An unconfirmed answer is ambiguous, and the
+  // replay branch answers a repeat before it ever reaches the code that
+  // would decline to confirm - so the retry resolves it.
+  it('resolves an unconfirmed mutation by asking again', async () => {
+    const m = await mint({unconfirmedMutation: true})
+    const k1 = secret('83')
+    m.state.creditNote(k1, 21000)
+    const rotated = await rotateNote(`${m.url}/w/cb`, k1)
+    expect(m.state.noteState(k1)).toBe('burned')
+    expect(m.state.noteState(rotated.k1)).toBe('outstanding')
   })
 
   it('treats an unreadable response as ambiguous', async () => {
@@ -1124,46 +1216,48 @@ describe('a mutation the transport retried', () => {
   // Exactly what a browser does with a stale keep-alive connection, and what
   // Go and the JDK do with an idempotent method: send it again, byte for
   // byte, and hand back the second answer. The mint applied the first one.
+  //
+  // This used to be the sharpest edge in the whole protocol: the second
+  // answer said "already spent", the library had to report a definitive
+  // refusal for a mutation that had definitely happened, and the only
+  // defence was to carry the secrets out on the error and make the caller
+  // go and check. LUD-25 closed it - a SERVICE MUST answer the identical
+  // request with the success it already gave - so an unstoppable transport
+  // retry is now simply invisible.
   const retryingFetch: typeof fetch = async (input, init) => {
     await fetch(input as string, init)
     return fetch(input as string, init)
   }
 
-  it('hands back the secret a retried rotate minted', async () => {
+  it('is invisible to a rotate: the retry replays the original success', async () => {
     const m = await mint()
     const k1 = secret('70')
     m.state.creditNote(k1, 21_000)
     const {callback} = await fetchNoteInfo(noteUrl(m, k1))
 
-    const err = await rotateNote(callback, k1, {fetch: retryingFetch}).catch(e => e)
-    // the mint saw a burned input the second time and said so
-    expect(err).toBeInstanceOf(NoteSpentError)
-
-    // ...but it really did mint against the hash the first attempt disclosed,
-    // and this is the only copy of that secret in existence
-    const recovered = newSecretsOf(err)
-    expect(recovered).toHaveLength(1)
-    expect(m.state.noteState(recovered[0]!)).toBe('outstanding')
-    const info = await fetchNoteInfo(noteUrl(m, recovered[0]!))
-    expect(info.maxWithdrawable).toBe(21_000)
+    const rotated = await rotateNote(callback, k1, {fetch: retryingFetch})
+    expect(m.state.noteState(k1)).toBe('burned')
+    expect(m.state.noteState(rotated.k1)).toBe('outstanding')
+    expect((await fetchNoteInfo(noteUrl(m, rotated.k1))).maxWithdrawable).toBe(21_000)
+    // and it is signed: the replay repeats the signature, so a note
+    // recovered this way is as verifiable as any other
+    expect(rotated.signature).toBeDefined()
   })
 
-  it('hands back both secrets a retried split minted', async () => {
+  it('is invisible to a split, both outputs and both signatures', async () => {
     const m = await mint()
     const k1 = secret('71')
     m.state.creditNote(k1, 100_000)
     const {callback} = await fetchNoteInfo(noteUrl(m, k1))
 
-    const err = await splitNote(callback, [k1], 40_000, {
-      fetch: retryingFetch
-    }).catch(e => e)
-    expect(err).toBeInstanceOf(NoteSpentError)
-    const [split, change] = newSecretsOf(err)
-    expect((await fetchNoteInfo(noteUrl(m, split!))).maxWithdrawable).toBe(40_000)
-    expect((await fetchNoteInfo(noteUrl(m, change!))).maxWithdrawable).toBe(60_000)
+    const split = await splitNote(callback, [k1], 40_000, {fetch: retryingFetch})
+    expect((await fetchNoteInfo(noteUrl(m, split.k1))).maxWithdrawable).toBe(40_000)
+    expect((await fetchNoteInfo(noteUrl(m, split.change))).maxWithdrawable).toBe(60_000)
+    expect(split.signature).toBeDefined()
+    expect(split.changeSignature).toBeDefined()
   })
 
-  it('hands back the secret a retried merge minted', async () => {
+  it('is invisible to a merge, whatever order the k1 arrive in', async () => {
     const m = await mint()
     const a = secret('72')
     const b = secret('73')
@@ -1171,12 +1265,31 @@ describe('a mutation the transport retried', () => {
     m.state.creditNote(b, 34_000)
     const {callback} = await fetchNoteInfo(noteUrl(m, a))
 
-    const err = await mergeNotes(callback, [a, b], {fetch: retryingFetch}).catch(
-      e => e
-    )
+    const merged = await mergeNotes(callback, [a, b], {fetch: retryingFetch})
+    expect((await fetchNoteInfo(noteUrl(m, merged.k1))).maxWithdrawable).toBe(55_000)
+  })
+
+  // The old world, kept as a fixture: a mint that has not implemented the
+  // replay rule still answers the second attempt as an already-spent input.
+  // The library cannot tell that from a genuine double spend - at the wire
+  // they are the same answer - so it does what it always did and hands the
+  // secrets back rather than a verdict.
+  it('hands the secrets back against a mint that will not replay', async () => {
+    const m = await mint({retriedMutation: 'refuse'})
+    const k1 = secret('84')
+    m.state.creditNote(k1, 21_000)
+    const {callback} = await fetchNoteInfo(noteUrl(m, k1))
+
+    const err = await rotateNote(callback, k1, {fetch: retryingFetch}).catch(e => e)
     expect(err).toBeInstanceOf(NoteSpentError)
-    const [merged] = newSecretsOf(err)
-    expect((await fetchNoteInfo(noteUrl(m, merged!))).maxWithdrawable).toBe(55_000)
+
+    // it really did mint against the hash the first attempt disclosed, and
+    // this is the only copy of that secret in existence
+    const recovered = newSecretsOf(err)
+    expect(recovered).toHaveLength(1)
+    expect(m.state.noteState(recovered[0]!)).toBe('outstanding')
+    const info = await fetchNoteInfo(noteUrl(m, recovered[0]!))
+    expect(info.maxWithdrawable).toBe(21_000)
   })
 
   it('carries a secret from a genuine double spend too, which probes as gone', async () => {
@@ -1217,7 +1330,7 @@ describe('a mutation the transport retried', () => {
     m.state.creditNote(k1, 21_000)
     const {callback} = await fetchNoteInfo(noteUrl(m, k1))
 
-    const err = await rotateNote(callback, k1).catch(e => e)
+    const err = await rotateNote(callback, k1, {mutationRetries: 0}).catch(e => e)
     expect(err).toBeInstanceOf(AmbiguousMutationError)
     // one helper, both error families: persist whatever it returns
     expect(newSecretsOf(err)).toEqual(err.newSecrets)
@@ -1232,6 +1345,11 @@ describe('a mutation the transport retried', () => {
 })
 
 describe('a restore that does not put the money on the wire', () => {
+  // Any valid compressed secp256k1 point. Nothing here verifies a
+  // signature - the restore walk only reads amounts - but the response has
+  // to be a conforming one to be read at all.
+  const MINT_PUBKEY =
+    '034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa'
   const root = deriveNoteRoot(hexToBytes('44'.repeat(32)))
   const HOST = 'mint.example'
   const BASE = 'https://mint.example/w'
@@ -1259,6 +1377,11 @@ describe('a restore that does not put the money on the wire', () => {
               callback: `${BASE}/cb`,
               maxWithdrawable: amount,
               minWithdrawable: 0,
+              // Mandatory since offline verification stopped being
+              // optional: a restore reads the same informational GET every
+              // other lookup does, and a SERVICE that publishes no key is
+              // refused there like anywhere else.
+              mintPubkey: MINT_PUBKEY,
               ...(k1 ? {k1} : {})
             }
       return new Response(JSON.stringify(body), {

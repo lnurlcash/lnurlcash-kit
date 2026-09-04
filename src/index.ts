@@ -132,6 +132,7 @@ export {
   HashLookupUnsupportedError,
   AmbiguousMintError,
   AmbiguousMutationError,
+  UnverifiableNoteError,
   classifyNoteError,
   newSecretsOf
 } from './errors.js'

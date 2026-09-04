@@ -18,10 +18,10 @@ Reference wallet: https://github.com/dni/lnurl-wallet
 ## Core API
 
 resolveNoteInput(text) -> url | null    accepts bech32 LNURL, lnurlw://, https
-fetchNoteInfo(url, opts?) -> {callback, k1, maxWithdrawable, mintPubkey?}
-rotateNote(callback, k1, opts?) -> {k1, signature?}
-splitNote(callback, k1s, amountMsat, opts?) -> {k1, change, signature?, changeSignature?}
-mergeNotes(callback, k1s, opts?) -> {k1, signature?}
+fetchNoteInfo(url, opts?) -> {callback, k1, maxWithdrawable, mintPubkey}
+rotateNote(callback, k1, opts?) -> {k1, signature}
+splitNote(callback, k1s, amountMsat, opts?) -> {k1, change, signature, changeSignature}
+mergeNotes(callback, k1s, opts?) -> {k1, signature}
 meltNote(callback, k1, bolt11, opts?) -> {pr?, verify?}
 settleNote(baseUrl, k1, expectedMsat, sig?, opts?) -> {k1, amountMsat, signature?, callback}
 settleNoteForValue(noteUrl, {mints, minMsat, requireSignature?}, opts?)
@@ -53,7 +53,11 @@ paymentRequestAmountMsat(req) -> msat  request amount is in SAT, this is the
 parseMintFee(metadata) / applyMintFee(gross, fee) / grossUpForMintFee(net, fee)
 createClient(opts) -> all of the above with opts bound
 
-Options (always last): {fetch?, timeoutMs?, offline?, randomSecret?}
+Options (always last): {fetch?, timeoutMs?, offline?, randomSecret?,
+                        requireSignatures?, mutationRetries?}
+  requireSignatures defaults true: refuse a mint that publishes no
+  mintPubkey or returns an unsigned mutation. mutationRetries defaults 1:
+  re-send a rotate/split/merge whose answer was lost, never a melt.
 
 ## Rules an implementation MUST follow
 
@@ -64,12 +68,23 @@ Options (always last): {fetch?, timeoutMs?, offline?, randomSecret?}
 3. On ANY error from a mutation call newSecretsOf(err) FIRST, persist what
    it returns, then call probeBurnedNote to learn what happened. Treating a
    failure as a failure destroys money the service may already have minted.
-   AmbiguousMutationError always carries secrets; so does a NoteSpentError
-   or NoteUnknownError from a mutation, because that is also what a retried
-   GET looks like once its first attempt burned the input.
+   AmbiguousMutationError always carries secrets; so does UnverifiableNoteError,
+   and so does a NoteSpentError or NoteUnknownError from a mutation, because
+   that is also what a retried GET looks like at a service that has not
+   implemented the replay rule.
 4. RequestRefusedError means nothing was sent - safe to treat as no-op.
 5. A melt's OK means IN FLIGHT, not spent. PendingNoteError means retry, not
    spent.
+5b. Offline verification is MANDATORY. A conforming service publishes
+   mintPubkey on every withdrawRequest and returns sig (and sig2 on a split)
+   from every rotate/split/merge. This library refuses a service that does
+   not; UnverifiableNoteError means the mutation LANDED unsigned, so keep its
+   secrets. Opt out per call with requireSignatures: false.
+5c. A retried rotate/split/merge MUST be answered by the service as a replay
+   of the original success, so re-sending one whose answer was lost is safe
+   and usually completes it. Re-send the IDENTICAL request: the replay is
+   matched on the k1 set, h, h2 and amount, so a fresh secret makes it a
+   different mutation and a second real burn. Never re-send a melt.
 6. Rotate immediately after claiming a minted note: the mint generated that
    preimage, and LUD-21 verify exposes it to anyone who saw the invoice.
    Does not apply to a note minted with `h` - see 13.
@@ -112,14 +127,18 @@ Options (always last): {fetch?, timeoutMs?, offline?, randomSecret?}
 RequestRefusedError    nothing sent, note untouched
 ServiceRejectedError   processed and refused (definitive)
   PendingNoteError     a melt is in flight on this k1 - retry
-  NoteSpentError       authoritative: already burned - but from a MUTATION it
-                       may be a retry whose first attempt landed; read
+  NoteSpentError       authoritative: already burned - but from a MUTATION at
+                       a service that will not replay a retry, it may be a
+                       retry whose first attempt landed; read
                        newSecretsOf(err) before believing it
   NoteUnknownError     service does not recognise it
 AmbiguousMintError     outcome UNKNOWN - assume nothing
   AmbiguousMutationError  carries .newSecrets - persist them
+UnverifiableNoteError  the mutation LANDED and came back unsigned. The note is
+                       real; carries .newSecrets - persist them
 newSecretsOf(err) -> string[]  the secrets any error is carrying, or none
-ProtocolError          a non-mutating response did not match the spec
+ProtocolError          a non-mutating response did not match the spec, which
+                       includes a withdrawRequest publishing no mintPubkey
 
 ## Conformance
 
