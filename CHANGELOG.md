@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.8.1 - 2026-09-04
+
+**`settleNote` could report a burned note as settled, losing it outright.**
+Settling reads what a split's change or a merge's output is really worth, which
+puts `k1` on the wire, so a rotate follows to replace the secret it just
+exposed. That rotate is best-effort by design: a SERVICE that refuses it has
+burned nothing, so keeping the exposed `k1` beats failing the whole settle.
+
+The fallback was a bare `catch`, which also covered a rotate that MAY HAVE
+LANDED - an ambiguous one, an unverifiable one, or a spent-or-unknown refusal,
+which is exactly what a mutation the SERVICE already applied looks like asked a
+second time. In every one of those the SERVICE had burned the `k1` being
+returned and minted a note under `h`, and the fresh secret `rotateNote()`
+attaches to the error was the only copy of it anywhere. Discarding it handed
+back a dead secret shaped like a success and dropped the live one.
+
+- `settleNote` now rethrows anything that could describe an applied mutation:
+  `AmbiguousMintError`, and any error carrying `newSecretsOf(err)`. Only a
+  refusal that burned nothing still returns the exposed `k1`.
+- It also rethrows anything that is not an `LnurlcashError`. The bare `catch`
+  swallowed `TypeError` and friends alongside the protocol errors the fallback
+  was for, so a bug in this library was reported as a settled note too.
+- **Behavioural change, no API change.** A caller that treated `settleNote` as
+  something that never throws now sees these errors. That is the point: each
+  one carries secrets that must be persisted before anything else.
+- Fixed in the sibling implementations the same day - Rust, Go, Python and
+  Kotlin all carried it.
+
 ## 0.8.0 - 2026-09-04
 
 **LUD-25's own derivation, and it is now the one to mint under.** The draft's
