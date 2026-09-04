@@ -1,6 +1,7 @@
 import {
   AmbiguousMintError,
   AmbiguousMutationError,
+  LnurlcashError,
   NoteSpentError,
   NoteUnknownError,
   PendingNoteError,
@@ -8,7 +9,8 @@ import {
   RequestRefusedError,
   ServiceRejectedError,
   UnverifiableNoteError,
-  classifyNoteError
+  classifyNoteError,
+  newSecretsOf
 } from './errors.js'
 import {
   lnurlFetch,
@@ -896,6 +898,21 @@ export type SettledNote = {
 // That GET puts k1 on the wire in turn, so a rotate follows, best-effort: a
 // SERVICE that cannot rotate keeps the exposed k1 and its original
 // signature rather than failing the whole operation.
+//
+// "Best-effort" means a rotate the SERVICE definitively REFUSED. It cannot
+// mean one that may have landed. This used to be a bare `catch`, which
+// covered both and returned the old k1 either way, shaped exactly like a
+// success. When the request had in fact landed, the SERVICE had burned that
+// k1 and minted the rotated note under `h`, whose only copy was the fresh
+// secret rotateNote() attaches to the error for precisely this reason (see
+// AmbiguousMutationError). Discarding it handed the caller a dead secret and
+// dropped the live one: an unrecoverable loss of a bearer note, reported as
+// a settled one.
+//
+// It is the last place that can go wrong, too. replayableCallbackRequest()
+// already retries an ambiguous mutation the way LUD-25's "Retrying a
+// mutation" requires, so an AmbiguousMintError arriving here has already
+// exhausted them.
 export const settleNote = async (
   baseUrl: string,
   k1: string,
@@ -915,7 +932,22 @@ export const settleNote = async (
       signature: rotated.signature,
       callback: info.callback
     }
-  } catch {
+  } catch (err) {
+    // Anything that could describe a mutation the SERVICE actually applied
+    // has to reach the caller. newSecretsOf() is non-empty for exactly those
+    // -- ambiguous, unverifiable, or a spent/unknown refusal, which is also
+    // what an already-applied mutation looks like asked a second time -- and
+    // empty for a refusal that burned nothing and left the note untouched,
+    // which is the case this fallback is for.
+    if (err instanceof AmbiguousMintError || newSecretsOf(err).length > 0) {
+      throw err
+    }
+    // A bug in this library is not a settled note either. The bare `catch`
+    // swallowed TypeError and friends alongside the protocol errors this
+    // fallback is actually for.
+    if (!(err instanceof LnurlcashError)) {
+      throw err
+    }
     return {
       k1,
       amountMsat: info.maxWithdrawable,
