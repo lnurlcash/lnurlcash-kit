@@ -35,10 +35,31 @@ fetchMintAddress(url, opts?) -> {mintPubkey?, payLink, name?, motd?, contact?,
   mintPubkey verifies note signatures. It is NOT the node key in nodeUri.
   nodePubkey is a deprecated alias for mintPubkey, dropped next breaking change.
   mintToHash is the fallback copy of the payRequest's flag - see 13.
-deriveNoteRoot(seedBytes) -> Uint8Array    HMAC-SHA256("lnurlcash-note-v1", seed)
-deriveNoteSecret(root, host, index) -> k1  HMAC-SHA256(root, host + ":" + index)
+deriveCashRoot(seedBytes) -> CashNode      LUD-25's scheme: BIP-32 m/139'
+deriveCashDomainNode(root, host) -> CashNode   m/139'/d1/d2/d3/d4, d1..d4 =
+  first 16 bytes of HMAC-SHA256(privkey at m/139'/0, host) as 4 raw uint32.
+  RAW: BIP-32 reads >= 2^31 as hardened, so ~half the levels are, by the
+  host name alone. Never mask the top bit, never harden all four - either
+  derives a different tree and restores nothing, silently.
+deriveCashSecret(root, host, index) -> k1  the hardened child i' of that node
+cashSecretAt(domainNode, index) -> k1      no EC needed below the domain node,
+  which is why a hardware signer is provisioned with the node, not the seed
+cashSecretSource(root, host, start) -> RandomSecret & {index()}
+cashNodeToHex/cashNodeFromHex             privateKey || chainCode, 64 bytes
+deriveCashChild(node, rawUint32) -> CashNode   BIP-32 CKDpriv, for checking
+  this library against BIP-32's own vectors
+deriveNoteRoot(seedBytes) -> Uint8Array    LEGACY, pre-spec. Do not mint under
+deriveNoteSecret(root, host, index) -> k1  it; still scanned so old notes live.
 derivedSecretSource(root, host, start) -> RandomSecret & {index()}
+restoreFromSeed(baseUrl, seed, host, {gap?, start?, probeK1?,
+  allowSecretDisclosure?}, opts?) -> {found[] (.scheme), next: {bip32, hmac}}
+  walks BOTH schemes. A by-hash walk CANNOT see a spent index (LUD-25 makes
+  spent and never-issued the same answer), and a rotate burns the old index,
+  so a wallet that rotated more than `gap` times scans as empty. The
+  persisted per-host counter is the real backup; the scan is the fallback.
+  The counter is not secret - back it up, and merge it upwards only.
 restoreNotes(baseUrl, root, host, {gap?, start?}, opts?) -> {found[], next}
+  legacy scheme only
 fetchPayRequest(url, opts?) -> {callback, minSendable, maxSendable, metadata,
   withdrawLink?, mintFee?, mintToHash?}     mintToHash: mint accepts an `h`
 fetchInvoiceVerification(url, opts?)

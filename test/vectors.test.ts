@@ -8,6 +8,13 @@ import {readFileSync} from 'node:fs'
 import {createRequire} from 'node:module'
 import {
   applyMintFee,
+  cashDomainIndices,
+  cashNodeToHex,
+  deriveCashChild,
+  deriveCashDomainNode,
+  deriveCashRoot,
+  deriveCashSecret,
+  type CashNode,
   decodePaymentRequest,
   deriveNoteRoot,
   deriveNoteSecret,
@@ -408,6 +415,45 @@ describe.skipIf(!derivation)('derivation vectors', () => {
     it(`derives ${c.host}:${c.index} - ${c.name}`, () => {
       const root = deriveNoteRoot(hexToBytes(c.seedHex))
       expect(deriveNoteSecret(root, c.host, c.index)).toBe(c.k1)
+      expect(hashK1(c.k1)).toBe(c.noteId)
+    })
+  }
+})
+
+// LUD-25's own derivation, the m/139' BIP-32 scheme. Skipped until the
+// conformance package publishes the file, like every other vector here.
+const cashDerivation = loadIfPublished('cash-derivation.json')
+
+describe.skipIf(!cashDerivation)('cash derivation vectors', () => {
+  it('states the scheme this library implements', () => {
+    expect(cashDerivation.scheme.purpose).toBe("m/139'")
+    expect(cashDerivation.scheme.secretPath).toBe("m/139'/d1/d2/d3/d4/i'")
+    // The one thing an implementation can silently get wrong: d1..d4 are raw
+    // uint32 and hardened only when they happen to land >= 2^31.
+    expect(cashDerivation.scheme.hardenedByMagnitudeOnly).toBe(true)
+  })
+
+  // BIP-32's own published vector, so a failure here says the CKDpriv step is
+  // wrong rather than the LUD-25 path above it.
+  it('agrees with BIP-32 test vector 1', () => {
+    const steps = cashDerivation.bip32Vector1
+    let node: CashNode = {
+      privateKey: hexToBytes(steps[0].node.slice(0, 64)),
+      chainCode: hexToBytes(steps[0].node.slice(64))
+    }
+    for (const step of steps.slice(1)) {
+      node = deriveCashChild(node, step.index)
+      expect(cashNodeToHex(node)).toBe(step.node)
+    }
+  })
+
+  for (const c of cashDerivation?.cases ?? []) {
+    it(`derives ${c.host} index ${c.index} - ${c.name}`, () => {
+      const root = deriveCashRoot(hexToBytes(c.seedHex))
+      expect(cashNodeToHex(root)).toBe(c.cashRoot)
+      expect(cashDomainIndices(root, c.host)).toEqual(c.domainIndices)
+      expect(cashNodeToHex(deriveCashDomainNode(root, c.host))).toBe(c.domainNode)
+      expect(deriveCashSecret(root, c.host, c.index)).toBe(c.k1)
       expect(hashK1(c.k1)).toBe(c.noteId)
     })
   }
