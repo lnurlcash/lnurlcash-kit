@@ -25,7 +25,9 @@ import {
   noteSignatureDigest,
   PendingNoteError,
   RequestRefusedError,
+  newSecretsOf,
   ServiceRejectedError,
+  settleNote,
   settleNoteForValue,
   verifyNoteSignature
 } from '../src/index.js'
@@ -82,12 +84,17 @@ const stubMint = ({
   host,
   amountMsat,
   state = 'live' as StubState,
-  confirmRotate = true
+  confirmRotate = true,
+  rotateRefuses
 }: {
   host: string
   amountMsat: number
   state?: StubState
   confirmRotate?: boolean
+  // A rotate the SERVICE definitively refuses: it answered, and nothing was
+  // burned. Distinct from confirmRotate:false, where the request landed and
+  // the answer is what went missing.
+  rotateRefuses?: string
 }): Stub => {
   const stub: Stub = {seen: [], rotated: false, fetch: null as never}
   const json = (body: unknown) =>
@@ -110,6 +117,7 @@ const stubMint = ({
       })
     }
     if (url.pathname === '/w/cb') {
+      if (rotateRefuses) return json({status: 'ERROR', reason: rotateRefuses})
       stub.rotated = true
       const h = url.searchParams.get('h')!
       // a mutation the caller cannot confirm, though it landed all the same
@@ -479,4 +487,83 @@ describe.skipIf(!table)('settle-for-value vectors', () => {
       expect(stub.rotated).toBe(false)
     })
   }
+})
+
+// settleNote's rotate is best-effort by design: a SERVICE that refuses it
+// keeps the exposed k1 rather than failing the whole operation. What that
+// must never cover is a rotate that MAY HAVE LANDED. Both used to return the
+// old k1, shaped identically to a success -- and when the request had landed,
+// that k1 was burned and the fresh secret riding the error was the only copy
+// of the note the SERVICE had just minted.
+describe('settleNote when the rotate does not succeed', () => {
+  it('surfaces an unconfirmable rotate rather than returning the burned k1', async () => {
+    const stub = stubMint({
+      host: 'mint.example',
+      amountMsat: 21_000,
+      confirmRotate: false
+    })
+    const outcome = await settleNote(noteAt('mint.example'), K1, 0, undefined, {
+      fetch: stub.fetch
+    }).then(
+      settled => settled,
+      err => err
+    )
+
+    // the request did land, so this must not come back looking settled
+    expect(stub.rotated).toBe(true)
+    expect(outcome).toBeInstanceOf(AmbiguousMutationError)
+
+    // and the fresh secret has to survive: it is the only copy of the note
+    const {newSecrets} = outcome as AmbiguousMutationError
+    expect(newSecrets).toHaveLength(1)
+    expect(isPreimage(newSecrets[0]!)).toBe(true)
+    expect(newSecrets[0]).not.toBe(K1)
+  })
+
+  it('still keeps the exposed k1 when the SERVICE definitively refuses', async () => {
+    const stub = stubMint({
+      host: 'mint.example',
+      amountMsat: 21_000,
+      rotateRefuses: 'rotate not supported'
+    })
+    const settled = await settleNote(noteAt('mint.example'), K1, 0, undefined, {
+      fetch: stub.fetch
+    })
+    // the SERVICE answered and burned nothing, so the note is still the note
+    expect(stub.rotated).toBe(false)
+    expect(settled.k1).toBe(K1)
+    expect(settled.amountMsat).toBe(21_000)
+  })
+
+  it('does not report a bug in this library as a settled note', async () => {
+    const stub = stubMint({host: 'mint.example', amountMsat: 21_000})
+    await expect(
+      settleNote(noteAt('mint.example'), K1, 0, undefined, {
+        fetch: stub.fetch,
+        randomSecret: () => {
+          throw new TypeError('not a protocol failure')
+        }
+      })
+    ).rejects.toThrow(TypeError)
+  })
+
+  it('surfaces a spent-or-unknown refusal, which can describe a rotate that already applied', async () => {
+    // A retried mutation the SERVICE already performed looks exactly like
+    // this from the wire, so the fresh secret still matters (see the note on
+    // NoteSpentError). Swallowing it returned the burned k1 as settled.
+    const stub = stubMint({
+      host: 'mint.example',
+      amountMsat: 21_000,
+      rotateRefuses: 'Invalid or already spent k1.'
+    })
+    const outcome = await settleNote(noteAt('mint.example'), K1, 0, undefined, {
+      fetch: stub.fetch
+    }).then(
+      settled => settled,
+      err => err
+    )
+    expect(outcome).toBeInstanceOf(NoteSpentError)
+    expect(newSecretsOf(outcome)).toHaveLength(1)
+    expect(newSecretsOf(outcome)[0]).not.toBe(K1)
+  })
 })
