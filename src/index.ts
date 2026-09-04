@@ -66,6 +66,19 @@ export {
 } from './secrets.js'
 
 export {
+  deriveCashRoot,
+  deriveCashChild,
+  deriveCashDomainNode,
+  deriveCashSecret,
+  cashDomainIndices,
+  cashSecretAt,
+  cashSecretSource,
+  cashNodeToHex,
+  cashNodeFromHex,
+  type CashNode
+} from './cash.js'
+
+export {
   PAYMENT_REQUEST_PREFIX,
   encodePaymentRequest,
   decodePaymentRequest,
@@ -84,9 +97,13 @@ export {
 
 export {
   restoreNotes,
+  restoreFromSeed,
+  type NoteScheme,
   type RestoredNote,
   type RestoreResult,
   type RestoreOptions,
+  type SeedRestoreOptions,
+  type SeedRestoreResult,
   type UnresolvedIndex
 } from './restore.js'
 
@@ -182,7 +199,12 @@ export {
 
 import type {LnurlcashOptions} from './transport.js'
 import * as client from './client.js'
-import {restoreNotes, type RestoreOptions} from './restore.js'
+import {
+  restoreNotes,
+  restoreFromSeed,
+  type RestoreOptions,
+  type SeedRestoreOptions
+} from './restore.js'
 import {settleNoteForValue, type SettleForValueOptions} from './settle.js'
 
 // Every request function takes options as its last argument, so they can be
@@ -235,6 +257,12 @@ export const createClient = (options: LnurlcashOptions = {}) => ({
     host: string,
     restoreOptions: RestoreOptions = {}
   ) => restoreNotes(baseUrl, root, host, restoreOptions, options),
+  restoreFromSeed: (
+    baseUrl: string,
+    seed: Uint8Array,
+    host: string,
+    restoreOptions: SeedRestoreOptions = {}
+  ) => restoreFromSeed(baseUrl, seed, host, restoreOptions, options),
   settleNoteForValue: (noteUrl: string, terms: SettleForValueOptions) =>
     settleNoteForValue(noteUrl, terms, options)
 })

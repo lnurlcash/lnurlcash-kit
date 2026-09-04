@@ -2,6 +2,78 @@
 
 ## Unreleased
 
+**LUD-25's own derivation, and it is now the one to mint under.** The draft's
+"Seed-recoverable note secrets" section specifies a BIP-32 scheme under
+`m/139'`, and the reference wallet implements it. This kit had shipped its own
+HMAC scheme four days before that section existed. One convention is the whole
+point of writing either of them down, so the specified one wins.
+
+- `deriveCashRoot(seed)`, `deriveCashDomainNode(root, host)`,
+  `deriveCashSecret(root, host, index)`, `cashSecretAt(domainNode, index)`,
+  `cashSecretSource(root, host, start)`, `cashNodeToHex` / `cashNodeFromHex`
+  and `deriveCashChild` in a new `cash.ts`. Additive - nothing existing
+  changes shape.
+- The scheme, in full, so this entry alone is enough to reimplement it:
+
+  ```
+  cashHashingKey   = m/139'/0
+  (d1, d2, d3, d4) = HMAC-SHA256(key = cashHashingKey, msg = utf8(host))[0..16]
+                     as 4 big-endian uint32
+  k1_i             = m/139'/d1/d2/d3/d4/i'
+  ```
+
+  `d1..d4` are used **exactly as they fall**. BIP-32 already reads any index
+  `>= 2^31` as hardened, so which of the four levels are hardened is decided
+  by the mint's host name and roughly half of them will be. Masking the top
+  bit, or hardening all four, derives a different tree and restores nothing,
+  silently. Only `i` is always hardened. `host` is what `serverOf` produces -
+  lowercase, port included - byte-identical to the reference wallet's.
+
+  Worked example. The BIP39 mnemonic `abandon abandon abandon abandon abandon
+  abandon abandon abandon abandon abandon abandon about` with an empty
+  passphrase gives `m/139'` as
+  `c7a2496e9b453a67c5d2a1f04936ec1259440d45454c795a99a66269e4cd3005111e1cc966fca2fe32f054f14caceab90449e536d94cf6935ea12a087e414f60`
+  (privateKey || chainCode). At `mint.example` the four levels are
+  `[2589708612, 3693348916, 172082394, 3793182078]`, of which the third is
+  the only unhardened one, and index 0 is
+  `de5b81405a12e1297b350d80e2ad85043ed5b9436a0c5592d3302778de330499`.
+- **The hardware-signer path.** Every unhardened level sits at or above the
+  per-mint node, so a signer provisioned with `deriveCashDomainNode`'s output
+  rather than the seed needs no elliptic curve at all: each `i'` beneath it is
+  HMAC-SHA512 and one modular addition. Whoever derives that node can derive
+  every note secret the wallet will hold at that mint, so it is provisioning
+  material - one mint's subtree, not the wallet.
+- BIP-32 is implemented here from its own primitives rather than pulled in as
+  a dependency, and tested against BIP-32's published test vector 1. Every
+  LUD-25 value above is checked against output from the reference
+  implementation's own library.
+
+**`restoreFromSeed` walks both schemes.** Notes minted under the old scheme
+are still money and a wallet that walked only the new one would leave them at
+a mint it can no longer name.
+
+- `restoreFromSeed(baseUrl, seed, host, {gap?, start?, probeK1?,
+  allowSecretDisclosure?}, opts?)`. `RestoredNote.scheme` is `bip32` or
+  `hmac`, `next` is `{bip32, hmac}`, and `start` takes one per scheme.
+- `restoreNotes` is unchanged in signature and behaviour, and still walks the
+  legacy scheme alone. `RestoredNote` and `UnresolvedIndex` gain a `scheme`
+  field.
+- `deriveNoteRoot`, `deriveNoteSecret` and `derivedSecretSource` are not
+  deprecated and are not going anywhere. Do not mint under them.
+
+**Say plainly what a restore can and cannot do.** LUD-25 requires a hash
+lookup to answer for a burned note exactly as it answers for one that never
+existed, and both reference mints do. So a by-hash walk cannot see a spent
+index at all; and since a rotate burns the *old* index, a wallet's spent
+indices sit below its live ones, and one that has rotated more than `gap`
+times scans as completely empty. The persisted per-host counter is what makes
+recovery work - the scan is the fallback. That counter is not secret, so it
+belongs in an ordinary backup, and a restore should merge counters upwards
+only. Documented on `RestoreOptions.start`, in the README and in `llms.txt`.
+
+Wants `lnurlcash-conformance` with `cash-derivation.json`, whose cases this
+suite runs as soon as they are published.
+
 ## 0.7.0 - 2026-09-04
 
 **Offline verification is mandatory, and this library now insists on it.**

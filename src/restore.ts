@@ -7,7 +7,8 @@ import {
 } from './errors.js'
 import {fetchNoteInfo, fetchNoteInfoByHash} from './client.js'
 import {buildNoteUrl} from './note.js'
-import {deriveNoteSecret, hashK1} from './secrets.js'
+import {deriveNoteRoot, deriveNoteSecret, hashK1} from './secrets.js'
+import {cashSecretAt, deriveCashDomainNode, deriveCashRoot} from './cash.js'
 import type {LnurlcashOptions} from './transport.js'
 
 // ---- restore from a seed ----
@@ -36,9 +37,17 @@ import type {LnurlcashOptions} from './transport.js'
 // which links them to each other and puts a floor under how private a
 // restore can be.
 
+// Which derivation the secret at this index came from. `bip32` is LUD-25's
+// own m/139' scheme (cash.ts) and is what a wallet should be minting under.
+// `hmac` is this kit's 0.2.0 scheme (secrets.ts), kept because notes were
+// minted under it before LUD-25 specified one, and scanned forever so none
+// of them goes missing.
+export type NoteScheme = 'bip32' | 'hmac'
+
 export type RestoredNote = {
   index: number
   k1: string
+  scheme: NoteScheme
   // What the SERVICE says the note is worth, in msat. `null` for a pending
   // note: a melt is in flight on it and the SERVICE will not state a value
   // until that resolves. The note may yet come back, and it may not.
@@ -56,6 +65,7 @@ export type RestoredNote = {
 export type UnresolvedIndex = {
   index: number
   k1: string
+  scheme: NoteScheme
   reason: string
 }
 
@@ -87,7 +97,11 @@ export type RestoreOptions = {
   // the wire call, which is rare and never happens twenty times in a row.
   gap?: number
   // Where to resume from. A wallet that already restored to index 40 passes
-  // 40 rather than walking those forty again.
+  // 40 rather than walking those forty again. This is the counter the wallet
+  // persists per host, and it is the PRIMARY recovery input, not the scan: a
+  // hash lookup MUST answer for a burned note exactly as it answers for one
+  // that never existed (LUD-25), so a wallet that has rotated more times than
+  // `gap` cannot rediscover its own position from the SERVICE alone.
   start?: number
   // A secret the caller already knows this SERVICE holds a note for, used
   // once as a positive control on whether it answers lookups by hash. Worth
@@ -115,18 +129,128 @@ type WalkOutcome = {
 // withdrawRequest - is thrown rather than swallowed: a half-walked run that
 // reported `next` as though it had finished would leave the wallet
 // re-deriving secrets the mint has already issued notes at.
+//
+// Walks the legacy HMAC scheme only (secrets.ts). A wallet holding a seed
+// should call `restoreFromSeed` instead, which walks LUD-25's scheme as well.
 export const restoreNotes = async (
   baseUrl: string,
   root: Uint8Array,
   host: string,
-  {gap = 20, start = 0, probeK1, allowSecretDisclosure = false}: RestoreOptions = {},
+  {
+    gap = 20,
+    start = 0,
+    probeK1,
+    allowSecretDisclosure = false
+  }: RestoreOptions = {},
   options: LnurlcashOptions = {}
 ): Promise<RestoreResult> => {
+  const walked = await restoreSchemes(
+    baseUrl,
+    [
+      {
+        scheme: 'hmac',
+        start,
+        secretAt: index => deriveNoteSecret(root, host, index)
+      }
+    ],
+    {gap, probeK1, allowSecretDisclosure},
+    options
+  )
+  return {...walked, next: walked.next.hmac!}
+}
+
+export type SeedRestoreOptions = Omit<RestoreOptions, 'start'> & {
+  // Per-scheme resume points, since the two schemes count their own indices.
+  // A wallet that has only ever minted under one of them still passes both:
+  // the other simply starts at 0 and finds nothing.
+  start?: {[K in NoteScheme]?: number}
+}
+
+export type SeedRestoreResult = Omit<RestoreResult, 'next'> & {
+  // The next unused index for each scheme. Persist the `bip32` one as this
+  // host's counter; `hmac` matters only while legacy notes are still
+  // outstanding, and stops moving once the last of them is rotated.
+  next: Record<NoteScheme, number>
+}
+
+// Everything `restoreNotes` does, for a wallet that has the seed itself: it
+// walks LUD-25's m/139' scheme AND this kit's legacy HMAC one, in that
+// order, against the same SERVICE.
+//
+// Both, and not just the specified one, because the kit shipped its own
+// derivation before LUD-25 had a section on it, and notes minted under it are
+// still spendable money. A wallet that walked only the new scheme would leave
+// them at a mint it can no longer name. Nothing about the two collides: they
+// derive different secrets, so a note answers to exactly one of them, and
+// `RestoredNote.scheme` says which.
+//
+// `seed` is raw bytes, the same input both schemes take - a 64-byte BIP39
+// seed in the ordinary case.
+export const restoreFromSeed = async (
+  baseUrl: string,
+  seed: Uint8Array,
+  host: string,
+  {
+    gap = 20,
+    start = {},
+    probeK1,
+    allowSecretDisclosure = false
+  }: SeedRestoreOptions = {},
+  options: LnurlcashOptions = {}
+): Promise<SeedRestoreResult> => {
+  // Derived once for the whole walk: the domain node costs up to four point
+  // multiplies, and re-deriving it per index would dominate the scan.
+  const domainNode = deriveCashDomainNode(deriveCashRoot(seed), host)
+  const legacyRoot = deriveNoteRoot(seed)
+  const walked = await restoreSchemes(
+    baseUrl,
+    [
+      {
+        scheme: 'bip32',
+        start: start.bip32 ?? 0,
+        secretAt: index => cashSecretAt(domainNode, index)
+      },
+      {
+        scheme: 'hmac',
+        start: start.hmac ?? 0,
+        secretAt: index => deriveNoteSecret(legacyRoot, host, index)
+      }
+    ],
+    {gap, probeK1, allowSecretDisclosure},
+    options
+  )
+  return {...walked, next: {bip32: walked.next.bip32!, hmac: walked.next.hmac!}}
+}
+
+type SchemeWalk = {
+  scheme: NoteScheme
+  start: number
+  secretAt: (index: number) => string
+}
+
+type WalkedResult = Omit<RestoreResult, 'next'> & {
+  next: {[K in NoteScheme]?: number}
+}
+
+const restoreSchemes = async (
+  baseUrl: string,
+  schemes: SchemeWalk[],
+  {
+    gap,
+    probeK1,
+    allowSecretDisclosure
+  }: {gap: number; probeK1?: string; allowSecretDisclosure: boolean},
+  options: LnurlcashOptions
+): Promise<WalkedResult> => {
   if (!Number.isSafeInteger(gap) || gap < 1) {
     throw new RangeError(`The gap limit must be a positive integer, not ${gap}.`)
   }
-  if (!Number.isSafeInteger(start) || start < 0) {
-    throw new RangeError(`The start index must be a non-negative integer, not ${start}.`)
+  for (const {scheme, start} of schemes) {
+    if (!Number.isSafeInteger(start) || start < 0) {
+      throw new RangeError(
+        `The start index for the ${scheme} scheme must be a non-negative integer, not ${start}.`
+      )
+    }
   }
 
   let hashLookupsConfirmed = false
@@ -144,29 +268,24 @@ export const restoreNotes = async (
   }
 
   // Ask by hash: nothing spendable goes on the wire.
-  const byHash = await walk(
-    start,
-    gap,
-    async k1 => {
-      const info = await fetchNoteInfoByHash(baseUrl, hashK1(k1), options)
+  const byHash: WalkOutcome[] = []
+  for (const scheme of schemes) {
+    const outcome = await walk(
+      scheme,
+      gap,
+      async k1 => {
+        const info = await fetchNoteInfoByHash(baseUrl, hashK1(k1), options)
+        hashLookupsConfirmed = true
+        return info
+      }
+    )
+    if (outcome.found.length > 0 || outcome.unresolved.length > 0) {
       hashLookupsConfirmed = true
-      return info
-    },
-    root,
-    host
-  )
-
-  if (byHash.found.length > 0 || byHash.unresolved.length > 0) hashLookupsConfirmed = true
-
-  if (hashLookupsConfirmed) {
-    return {
-      found: byHash.found,
-      unresolved: byHash.unresolved,
-      next: byHash.lastUsed === null ? start : byHash.lastUsed + 1,
-      hashLookupsConfirmed: true,
-      disclosesSecrets: false
     }
+    byHash.push(outcome)
   }
+
+  if (hashLookupsConfirmed) return collate(schemes, byHash, false)
 
   // Nothing came back, and nothing proved this SERVICE answers by hash. The
   // walk may have been a long conversation about nothing, or the wallet may
@@ -180,33 +299,49 @@ export const restoreNotes = async (
 
   // Only now, and only because the caller explicitly asked for it, fall
   // back to the form that reveals the secrets.
-  const bySecret = await walk(
-    start,
-    gap,
-    k1 => fetchNoteInfo(buildNoteUrl(baseUrl, k1), options),
-    root,
-    host
-  )
-  const walkedThrough = bySecret.highestWalked === null ? start - 1 : bySecret.highestWalked
-  const used = bySecret.lastUsed === null ? start - 1 : bySecret.lastUsed
-  return {
-    found: bySecret.found,
-    unresolved: bySecret.unresolved,
+  const bySecret: WalkOutcome[] = []
+  for (const scheme of schemes) {
+    bySecret.push(
+      await walk(scheme, gap, k1 =>
+        fetchNoteInfo(buildNoteUrl(baseUrl, k1), options)
+      )
+    )
+  }
+  return collate(schemes, bySecret, true)
+}
+
+const collate = (
+  schemes: SchemeWalk[],
+  outcomes: WalkOutcome[],
+  disclosesSecrets: boolean
+): WalkedResult => {
+  const next: {[K in NoteScheme]?: number} = {}
+  schemes.forEach(({scheme, start}, at) => {
+    const outcome = outcomes[at]!
+    if (!disclosesSecrets) {
+      next[scheme] = outcome.lastUsed === null ? start : outcome.lastUsed + 1
+      return
+    }
     // Every index this walk touched is burned, whether or not a note was
-    // ever minted under it: its secret is in a log somewhere now, so
-    // minting into it later would be minting a note a stranger can spend.
-    next: Math.max(used, walkedThrough) + 1,
-    hashLookupsConfirmed: false,
-    disclosesSecrets: true
+    // ever minted under it: its secret is in a log somewhere now, so minting
+    // into it later would be minting a note a stranger can spend.
+    const used = outcome.lastUsed ?? start - 1
+    const walkedThrough = outcome.highestWalked ?? start - 1
+    next[scheme] = Math.max(used, walkedThrough) + 1
+  })
+  return {
+    found: outcomes.flatMap(outcome => outcome.found),
+    unresolved: outcomes.flatMap(outcome => outcome.unresolved),
+    next,
+    hashLookupsConfirmed: !disclosesSecrets,
+    disclosesSecrets
   }
 }
 
 const walk = async (
-  start: number,
+  {scheme, start, secretAt}: SchemeWalk,
   gap: number,
-  lookup: (k1: string) => Promise<{callback: string; maxWithdrawable: number}>,
-  root: Uint8Array,
-  host: string
+  lookup: (k1: string) => Promise<{callback: string; maxWithdrawable: number}>
 ): Promise<WalkOutcome> => {
   const found: RestoredNote[] = []
   const unresolved: UnresolvedIndex[] = []
@@ -214,13 +349,14 @@ const walk = async (
   let highestWalked: number | null = null
   let unknownRun = 0
   for (let index = start; unknownRun < gap; index++) {
-    const k1 = deriveNoteSecret(root, host, index)
+    const k1 = secretAt(index)
     highestWalked = index
     try {
       const info = await lookup(k1)
       found.push({
         index,
         k1,
+        scheme,
         amountMsat: info.maxWithdrawable,
         state: 'live',
         callback: info.callback
@@ -231,11 +367,16 @@ const walk = async (
       if (err instanceof PendingNoteError) {
         // Alive, value unstated. Recorded so the caller can reconcile it
         // later rather than losing the index to the gap counter.
-        found.push({index, k1, amountMsat: null, state: 'pending'})
+        found.push({index, k1, scheme, amountMsat: null, state: 'pending'})
         lastUsed = index
         unknownRun = 0
       } else if (err instanceof NoteSpentError) {
         // Spent is still used. The note is gone, but the index is not free.
+        // Only a walk by SECRET ever sees this: LUD-25 requires a hash
+        // lookup to answer for a burned note exactly as it answers for one
+        // that never existed, so on the by-hash path a spent index is
+        // indistinguishable from a gap and counts against the gap limit.
+        // That is the whole reason a wallet has to persist its own counter.
         lastUsed = index
         unknownRun = 0
       } else if (err instanceof NoteUnknownError) {
@@ -247,7 +388,7 @@ const walk = async (
         // having issued it, so the index counts as used and the gap
         // counter resets. Advancing it here is how a walk terminates
         // early and silently abandons live notes beyond the run.
-        unresolved.push({index, k1, reason: err.reason})
+        unresolved.push({index, k1, scheme, reason: err.reason})
         lastUsed = index
         unknownRun = 0
       } else {

@@ -824,6 +824,7 @@ describe('naming the note you are buying', () => {
       {
         index: 0,
         k1: deriveNoteSecret(root, host, 0),
+        scheme: 'hmac',
         amountMsat: 21000,
         state: 'live',
         callback: found[0]!.callback
@@ -1175,7 +1176,7 @@ describe('restore from a seed', () => {
       {fetch: stub}
     )
     expect(result.found).toEqual([
-      {index: 0, k1, amountMsat: null, state: 'pending'}
+      {index: 0, k1, scheme: 'hmac', amountMsat: null, state: 'pending'}
     ])
     expect(result.next).toBe(1)
   })
@@ -1495,7 +1496,9 @@ describe('a restore that does not put the money on the wire', () => {
     // is not a note, but the service plainly knows the index, so the gap
     // counter resets and the walk reaches the live note at 2. Advance it
     // instead and the walk stops at index 1, and that note is lost.
-    expect(result.unresolved).toEqual([{index: 0, k1: zero, reason: 'note expired'}])
+    expect(result.unresolved).toEqual([
+      {index: 0, k1: zero, scheme: 'hmac', reason: 'note expired'}
+    ])
     expect(result.found.map(n => n.k1)).toEqual([beyond])
     expect(result.next).toBe(3)
   })
