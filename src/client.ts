@@ -269,6 +269,28 @@ export type MintAddressInfo = {
   nodeCapacityMsat?: number
   nodeNumChannels?: number
   nodeNumPeers?: number
+  // Every address the SERVICE's node announces, each already
+  // "node_key@host:port". `nodeUri` is the first of these; a node behind
+  // Tor as well as clearnet has more than one, and a caller that can only
+  // reach the other one needs the whole list. Absent, not empty, when the
+  // SERVICE publishes none.
+  nodeUris?: string[]
+
+  // ---- how long this mint intends to be here ----
+  //
+  // The day the SERVICE plans to close, ISO-8601 ("2026-12-31"). Advance
+  // warning, deliberately not the same thing as a mint that has already
+  // stopped minting: the point is to let a WALLET tell its holder while
+  // there is still time to spend. Nothing enforces it and nothing verifies
+  // it - a mint can close without ever setting it, and setting it is not a
+  // promise - so treat it as a prompt to move notes, never as a deadline
+  // to compute against.
+  sunsetDate?: string
+  // What the SERVICE says it owes: the combined value of every note it has
+  // issued and not burned, in msat. Its own claim about its own database,
+  // with nothing to check it against, so it is worth reading next to what
+  // the node holds and worth nothing on its own.
+  outstandingNotesMsat?: number
 
   // ---- who runs this mint (all optional) ----
   //
@@ -341,6 +363,30 @@ const asBoolean = (value: unknown): boolean | undefined =>
 const asPubkeyList = (value: unknown): string[] | undefined =>
   Array.isArray(value) ? value.filter(item => typeof item === 'string') : undefined
 
+// Non-empty strings only, and undefined rather than [] for a list that had
+// none: a caller checking `nodeUris?.length` and a caller checking
+// `'nodeUris' in info` should reach the same conclusion about a SERVICE
+// that announced nothing.
+const asStringList = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const entries = value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  return entries.length ? entries : undefined
+}
+
+// A calendar day and nothing else. A SERVICE sending a timestamp, a
+// locale-formatted date or a typo gets dropped rather than passed on,
+// because the one thing a WALLET does with this is put it in front of a
+// holder, and a wrong date there is worse than no date. Round-tripped, so
+// 2026-02-31 - which Date accepts and rolls forward to 3 March - does not
+// survive as a day nobody meant.
+const asIsoDate = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+    ? value
+    : undefined
+}
+
 // Best-effort discovery only. This endpoint is experimental and carries no
 // LUD number, so most SERVICEs - including ones this library otherwise
 // works with perfectly - simply will not have it. Treat a rejection as "no
@@ -386,6 +432,9 @@ export const fetchMintAddress = async (
     nodeCapacityMsat: asNumber(body.nodeCapacity) ?? asNumber(body.nodeCapacityMsat),
     nodeNumChannels: asNumber(body.nodeNumChannels),
     nodeNumPeers: asNumber(body.nodeNumPeers),
+    nodeUris: asStringList(body.nodeUris),
+    sunsetDate: asIsoDate(body.sunsetDate),
+    outstandingNotesMsat: asNumber(body.outstandingNotesMsat),
     name: asString(body.name),
     description: asString(body.description),
     contact: asContact(body.contact),

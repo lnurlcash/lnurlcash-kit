@@ -791,6 +791,45 @@ describe('mint address fields', () => {
     expect(info.nodeUri).toContain(nodeKey)
   })
 
+  it('reads every address the node announces, with nodeUri still the first', async () => {
+    const nodeKey = '03' + '11'.repeat(32)
+    const clearnet = `${nodeKey}@2.29.14.244:9735`
+    const onion = `${nodeKey}@abcdefghijklmnop.onion:9735`
+    const info = await fetchAddress({nodeUri: clearnet, nodeUris: [clearnet, onion]})
+    expect(info.nodeUris).toEqual([clearnet, onion])
+    expect(info.nodeUri).toBe(clearnet)
+  })
+
+  it('says undefined rather than [] for a mint that announces no address', async () => {
+    // A caller checking `nodeUris?.length` and one checking `'nodeUris' in
+    // info` have to reach the same conclusion.
+    expect((await fetchAddress({nodeUris: []})).nodeUris).toBeUndefined()
+    expect((await fetchAddress()).nodeUris).toBeUndefined()
+    expect((await fetchAddress({nodeUris: 'not a list'})).nodeUris).toBeUndefined()
+    expect((await fetchAddress({nodeUris: [1, 'a', '', null]})).nodeUris).toEqual(['a'])
+  })
+
+  it('reads a closing date, and drops anything that is not one', async () => {
+    // The one thing a WALLET does with this is show it to a holder, so a
+    // wrong date is worse than no date.
+    expect((await fetchAddress({sunsetDate: '2026-12-31'})).sunsetDate).toBe('2026-12-31')
+    expect((await fetchAddress()).sunsetDate).toBeUndefined()
+    expect((await fetchAddress({sunsetDate: '31/12/2026'})).sunsetDate).toBeUndefined()
+    expect((await fetchAddress({sunsetDate: '2026-12-31T09:00:00Z'})).sunsetDate).toBeUndefined()
+    // Date takes this one and rolls it forward to 3 March.
+    expect((await fetchAddress({sunsetDate: '2026-02-31'})).sunsetDate).toBeUndefined()
+    expect((await fetchAddress({sunsetDate: 20261231})).sunsetDate).toBeUndefined()
+  })
+
+  it('reads what the mint says it owes, zero included', async () => {
+    // "Owes nothing" and "will not say" are different claims about a
+    // custodian, and a holder needs to be able to tell them apart.
+    expect((await fetchAddress({outstandingNotesMsat: 48_000})).outstandingNotesMsat).toBe(48_000)
+    expect((await fetchAddress({outstandingNotesMsat: 0})).outstandingNotesMsat).toBe(0)
+    expect((await fetchAddress()).outstandingNotesMsat).toBeUndefined()
+    expect((await fetchAddress({outstandingNotesMsat: '48000'})).outstandingNotesMsat).toBeUndefined()
+  })
+
   it('still refuses a response that is not a mint address', async () => {
     await expect(
       fetchMintAddress('https://mint.example/.well-known/lnurlw/mint', {
