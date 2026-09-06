@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+**`fetchMintAddress` reads three more fields.** The reference mint publishes
+them and this dropped all three on the floor, because the parser maps field by
+field and an unrecognised name is discarded by design.
+
+- `nodeUris` - every address the SERVICE's node announces. `nodeUri` is the
+  first of them; a node behind Tor as well as clearnet has more, and a caller
+  that can only reach the other one needs the list. Undefined rather than `[]`
+  when there are none, so `nodeUris?.length` and `'nodeUris' in info` agree.
+- `sunsetDate` - the day the SERVICE plans to close, ISO-8601. Advance warning
+  while there is still time to spend, deliberately not the same thing as a mint
+  that has already stopped minting. Validated as a real calendar day and
+  dropped otherwise: the one thing a WALLET does with this is put it in front
+  of a holder, and a wrong date there is worse than no date.
+- `outstandingNotesMsat` - what the SERVICE says it owes. Its own claim about
+  its own database, with nothing to check it against, so read it next to what
+  the node holds rather than on its own.
+
 ## 0.8.1 - 2026-09-04
 
 **`settleNote` could report a burned note as settled, losing it outright.**
