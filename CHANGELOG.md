@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 - 2026-09-09
 
 **`fetchMintAddress` reads three more fields.** The reference mint publishes
 them and this dropped all three on the floor, because the parser maps field by
