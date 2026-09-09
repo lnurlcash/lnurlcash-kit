@@ -11,7 +11,7 @@ name: release
 #
 # npm matches the trusted publisher against THIS caller workflow, not
 # against forgesworn/anvil - configure it on npmjs.com as repo
-# TheCryptoDonkey/lnurlcash-kit, workflow release.yml. The very first
+# lnurlcash/lnurlcash-kit, workflow release.yml. The very first
 # publish of a new package name cannot use OIDC at all (npm/cli#8544); it
 # is seeded by hand once, and trusted publishing takes over from there.
 

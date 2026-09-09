@@ -117,8 +117,8 @@ fresh secret got discarded along with the note the service had just minted.
 Node's `fetch` does not retry on its own, but a browser resends an idempotent
 request that failed on a stale pooled connection, and Go and the JDK do the
 same by their own routes — the hazard broke the
-[Kotlin](https://github.com/TheCryptoDonkey/lnurlcash-kotlin) and
-[Go](https://github.com/TheCryptoDonkey/lnurlcash-go) siblings during
+[Kotlin](https://github.com/lnurlcash/lnurlcash-kotlin) and
+[Go](https://github.com/lnurlcash/lnurlcash-go) siblings during
 development, by two different mechanisms.
 
 LUD-25 closed it. A service MUST answer a byte-identical rotate, split or
@@ -319,7 +319,7 @@ still money. Do not mint under it. `restoreFromSeed` walks it alongside the
 specified scheme so none of those notes goes missing.
 
 Both schemes ship with
-[conformance vectors](https://github.com/TheCryptoDonkey/lnurlcash-conformance)
+[conformance vectors](https://github.com/lnurlcash/lnurlcash-conformance)
 for the ports.
 
 ```ts
@@ -616,14 +616,14 @@ The reference implementations, both dni's, both MIT:
 
 Everything else built on LNURLcash — the other wallets and mints, the
 hardware vault, the sibling language ports — is indexed in
-[awesome-lnurlcash](https://github.com/TheCryptoDonkey/awesome-lnurlcash).
+[awesome-lnurlcash](https://github.com/lnurlcash/awesome-lnurlcash).
 
 Changes made on extraction are listed in [CHANGELOG.md](CHANGELOG.md); two
 are behavioural fixes worth reading if you are porting from that code.
 
 ## Conformance
 
-Tested against [lnurlcash-conformance](https://github.com/TheCryptoDonkey/lnurlcash-conformance):
+Tested against [lnurlcash-conformance](https://github.com/lnurlcash/lnurlcash-conformance):
 language-neutral vectors plus a mock mint that can be told to misbehave —
 drop a connection mid-mutation, sign in the wrong byte order, lie about a
 note's value, never settle a melt. If you are writing an LNURLcash

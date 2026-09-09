@@ -164,4 +164,4 @@ ProtocolError          a non-mutating response did not match the spec, which
 ## Conformance
 
 Vectors and an adversarial mock mint:
-https://github.com/TheCryptoDonkey/lnurlcash-conformance
+https://github.com/lnurlcash/lnurlcash-conformance

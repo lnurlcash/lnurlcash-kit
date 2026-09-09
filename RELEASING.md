@@ -52,7 +52,7 @@ After the seed exists, wire OIDC so no token is ever needed again.
 
 1. npmjs.com, the package, Settings, Trusted Publisher.
 2. Add a GitHub Actions publisher:
-   - Repository: `TheCryptoDonkey/lnurlcash-kit`
+   - Repository: `lnurlcash/lnurlcash-kit`
    - Workflow filename: `release.yml` — **this repo's caller**, not anvil's
      reusable workflow. npm matches the OIDC `workflow_ref` claim, which names
      the caller; pointing it at anvil fails with a misleading "package not
@@ -60,6 +60,14 @@ After the seed exists, wire OIDC so no token is ever needed again.
    - Environment: `npm-publish`
 3. Then turn on "require 2FA and disallow tokens" for the package, so the only
    route to publish is this workflow. The bootstrap token can be revoked.
+
+**If the repository ever moves** - renamed, or transferred to another owner -
+this has to be changed to match, before the next release. npm matches the OIDC
+claim against the repository as it is named NOW, GitHub's redirect does not
+apply to it, and a stale entry fails as `npm error 404 ... could not be found
+or you do not have permission to access it` on the publish step. That reads
+like a missing package rather than a rejected token, so it is worth checking
+here first.
 
 ## Every release after the first
 

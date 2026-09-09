@@ -9,11 +9,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TheCryptoDonkey/lnurlcash-kit.git"
+    "url": "git+https://github.com/lnurlcash/lnurlcash-kit.git"
   },
-  "homepage": "https://github.com/TheCryptoDonkey/lnurlcash-kit#readme",
+  "homepage": "https://github.com/lnurlcash/lnurlcash-kit#readme",
   "bugs": {
-    "url": "https://github.com/TheCryptoDonkey/lnurlcash-kit/issues"
+    "url": "https://github.com/lnurlcash/lnurlcash-kit/issues"
   },
   "type": "module",
   "sideEffects": false,
