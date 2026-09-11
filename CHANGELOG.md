@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 - 2026-09-11
+
+**A Part 2 branch rooted in a Nostr key.**
 
 - `deriveNostrCashSeed(secretKey)` and `deriveNostrAddressNode(secretKey,
   host)`: a Part 2 address branch rooted in a Nostr identity key, for a holder
