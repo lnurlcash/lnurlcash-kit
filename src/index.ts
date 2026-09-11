@@ -79,6 +79,28 @@ export {
 } from './cash.js'
 
 export {
+  encodeCp1,
+  decodeCp1,
+  isCp1,
+  encodeCk1,
+  decodeCk1,
+  isCk1,
+  encodeCs1,
+  decodeCs1,
+  isCs1,
+  encodeCx1,
+  decodeCx1,
+  isCx1,
+  deriveNotePubkey,
+  deriveNoteSecretKey,
+  signNoteOwnership,
+  recoverNoteOwnershipPubkey,
+  deriveCashAddressNode,
+  cashNodeToCx1,
+  type Cx1
+} from './recoverable.js'
+
+export {
   PAYMENT_REQUEST_PREFIX,
   encodePaymentRequest,
   decodePaymentRequest,

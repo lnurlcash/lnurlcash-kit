@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+**LUD-25 Part 2 building blocks.** Notes keyed by a public key and spent by a
+recoverable signature. The wire calls come next; this is the part every one of
+them rests on.
+
+- The four encodings: `cp1` (a note's public key), `ck1` (its bearer secret),
+  `cs1` (the mint's certificate) and `cx1` (a watch-only branch), with
+  `encode*`, `decode*` and `is*` for each. Decoders return null rather than
+  throw, and refuse mixed case as BIP-350 does.
+- `deriveNotePubkey` and `deriveNoteSecretKey`, the per-note key tweak.
+- `signNoteOwnership` and `recoverNoteOwnershipPubkey`.
+- `deriveCashAddressNode` and `cashNodeToCx1`. The branch sits at
+  `m/139'/1'/d1..d4`, which is what lnurl-wallet derives, not the
+  `m/139'/d1..d4` the spec text gives.
+- `verifyNoteSignature` now takes a `ck1` note and a `cs1` certificate, so a
+  Part 2 note verifies offline the same way a Part 1 note does.
+
+Names and signatures match lnurl-wallet's `src/lib`. Every value is graded
+against `test/vectors/part2.json`, generated from lnurl-wallet and checked
+against lnurl-mint.
+
 ## 0.9.0 - 2026-09-09
 
 **`fetchMintAddress` reads three more fields.** The reference mint publishes

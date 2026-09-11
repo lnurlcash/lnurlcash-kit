@@ -48,6 +48,22 @@ cashSecretSource(root, host, start) -> RandomSecret & {index()}
 cashNodeToHex/cashNodeFromHex             privateKey || chainCode, 64 bytes
 deriveCashChild(node, rawUint32) -> CashNode   BIP-32 CKDpriv, for checking
   this library against BIP-32's own vectors
+LUD-25 Part 2: a note keyed by a public key, spent by a recoverable signature
+encodeCp1/decodeCp1/isCp1   note pubkey, 32-byte x-only, bech32m "cp"
+encodeCk1/decodeCk1/isCk1   note bearer secret, 65-byte r||s||recid, "ck"
+encodeCs1/decodeCs1/isCs1   mint certificate over hex(pk), same layout, "cs"
+encodeCx1/decodeCx1/isCx1   watch-only branch {pubkeyXOnly, chainCode}, "cx"
+  decoders return null, never throw; mixed case is refused (BIP-350)
+deriveCashAddressNode(root, host) -> CashNode   m/139'/1'/d1..d4, hashing key
+  m/139'/1'/0. The REFERENCE WALLET's path, not the spec text's m/139'/d1..d4
+  (that is the Part 1 ladder's node, and finds none of its notes).
+cashNodeToCx1(node) -> Cx1
+deriveNotePubkey(P, chainCode, i) -> pk    watch-only, BIP-341 style tweak;
+  i any uint32, 4-byte big-endian, never hardened
+deriveNoteSecretKey(p, chainCode, i) -> sk negates p first when P has odd y
+signNoteOwnership(sk) -> 65 bytes          RFC6979 over fixed "LNURLcash"
+recoverNoteOwnershipPubkey(sig) -> pk | null
+verifyNoteSignature also takes a ck1 as k1 and a cs1 as the signature
 deriveNoteRoot(seedBytes) -> Uint8Array    LEGACY, pre-spec. Do not mint under
 deriveNoteSecret(root, host, index) -> k1  it; still scanned so old notes live.
 derivedSecretSource(root, host, start) -> RandomSecret & {index()}
