@@ -181,3 +181,42 @@ describe('encodings', () => {
     expect([isCp1(k1), isCk1(k1), isCs1(k1), isCx1(k1)]).toEqual([false, false, false, false])
   })
 })
+
+describe('a branch rooted in a Nostr key', () => {
+  // The same file heartwood-esp32's cash_key.rs grades against: the device
+  // and this kit have to derive one branch from one identity key.
+  const nostrVectors = JSON.parse(readFileSync(new URL('./vectors/nostr-seed.json', import.meta.url), 'utf8')) as {
+    cases: {
+      identity: string
+      host: string
+      seed: string
+      addressNode: string
+      cx1: string
+      notes: {index: number; noteSecretKey: string; notePubkey: string; cp1: string; ck1: string}[]
+    }[]
+  }
+
+  it('matches the vectors the heartwood derives', async () => {
+    const {deriveNostrAddressNode, deriveNostrCashSeed} = await import('../src/recoverable.js')
+    expect(nostrVectors.cases.length).toBeGreaterThan(0)
+    for (const c of nostrVectors.cases) {
+      const identity = hexToBytes(c.identity)
+      expect(bytesToHex(deriveNostrCashSeed(identity))).toBe(c.seed)
+      const node = deriveNostrAddressNode(identity, c.host)
+      expect(cashNodeToHex(node)).toBe(c.addressNode)
+      const {pubkeyXOnly, chainCode} = cashNodeToCx1(node)
+      expect(encodeCx1(pubkeyXOnly, chainCode)).toBe(c.cx1)
+      for (const n of c.notes) {
+        const sk = deriveNoteSecretKey(node.privateKey, node.chainCode, n.index)
+        expect(bytesToHex(sk)).toBe(n.noteSecretKey)
+        expect(encodeCp1(deriveNotePubkey(pubkeyXOnly, chainCode, n.index))).toBe(n.cp1)
+        expect(encodeCk1(signNoteOwnership(sk))).toBe(n.ck1)
+      }
+    }
+  })
+
+  it('refuses a key that is not 32 bytes', async () => {
+    const {deriveNostrCashSeed} = await import('../src/recoverable.js')
+    expect(() => deriveNostrCashSeed(new Uint8Array(31))).toThrow(RangeError)
+  })
+})

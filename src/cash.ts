@@ -110,6 +110,11 @@ export const deriveCashChild = (node: CashNode, index: number): CashNode => {
   return {privateKey: to32Bytes(key), chainCode: material.slice(32)}
 }
 
+// The BIP-32 master node of a seed. Exported beside `deriveCashChild` for the
+// same reason: a consumer walking a path this kit does not name (nsec-tree's
+// m/44'/1237'/727'/0'/0', say) starts here.
+export const deriveCashMaster = (seed: Uint8Array): CashNode => masterFrom(seed)
+
 const masterFrom = (seed: Uint8Array): CashNode => {
   if (seed.length < 16 || seed.length > 64) {
     throw new RangeError(

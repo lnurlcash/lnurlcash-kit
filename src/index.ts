@@ -68,6 +68,7 @@ export {
 export {
   deriveCashRoot,
   deriveCashChild,
+  deriveCashMaster,
   deriveCashDomainNode,
   deriveCashSecret,
   cashDomainIndices,
@@ -99,6 +100,9 @@ export {
   noteLookupOf,
   deriveCashAddressNode,
   cashNodeToCx1,
+  NOSTR_CASH_SEED_LABEL,
+  deriveNostrCashSeed,
+  deriveNostrAddressNode,
   type Cx1
 } from './recoverable.js'
 
