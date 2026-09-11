@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.13.0 - 2026-09-11
+
+**A plain note is unsigned.** LUD-25 Part 2 certifies `cp1` notes only, and
+the reference mint and moneyer now answer a rotate, split or merge to a hash
+output with a bare `{"status":"OK"}`. This library follows.
+
+- `requireSignatures` now defaults to **false**. A hash output that comes
+  back unsigned is the spec, not a fault: `signature` (and `changeSignature`)
+  is undefined, and no `UnverifiableNoteError` is raised. Set it true to
+  keep demanding the old Part 1 signature over the hash.
+- A `cp1` output is owed its `cs1` certificate regardless of the option: a
+  rotate, split or merge naming one that comes back without `sig` (or
+  `sig2` for a `cp1` change) raises `UnverifiableNoteError`, carrying the
+  fresh secrets as before.
+- New option `requireMintPubkey`, default true, takes over the
+  `withdrawRequest` check that `requireSignatures` used to carry. A Part
+  1-only mint that publishes no `mintPubkey` is admitted with it set false.
+- Graded by lnurlcash-conformance 0.10.0's response vectors, which now
+  carry `output`/`change: "cp1"` on the cases that mint a `cp1` note.
+
+If you relied on the default to refuse unsigned plain notes, set
+`requireSignatures: true`; if you only ever wanted verifiable notes, hold
+`cp1` notes, which are the only kind the spec makes verifiable.
+
 ## 0.12.1 - 2026-09-11
 
 - `fetchNoteInfo` compares the mint's echoed `k1` with the one it asked

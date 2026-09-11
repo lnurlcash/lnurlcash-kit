@@ -15,6 +15,7 @@ import {
   RequestRefusedError,
   ServiceRejectedError,
   UnverifiableNoteError,
+  encodeCp1,
   fetchInvoiceVerification,
   fetchMintAddress,
   fetchNoteInfo,
@@ -303,16 +304,21 @@ describe('response classification vectors', () => {
 
   // The vectors say which call each case is driven through, and it matters:
   // a melt mints nothing, so it has no signature to return and none is
-  // required, while a rotate answering without one is its own outcome.
-  // Retries are off so one case is one request - the replay behaviour has
-  // its own tests.
+  // required, while a rotate to a cp1 output answering without a
+  // certificate is its own outcome. `output` and `change` name the kind of
+  // note a mutation is minting; a hash unless the case says cp1. Retries
+  // are off so one case is one request - the replay behaviour has its own
+  // tests.
+  const CP1 = encodeCp1(new Uint8Array(32).fill(0x0b))
   const call = (c: any, fetch: typeof globalThis.fetch) => {
     const opts = {fetch, mutationRetries: 0}
+    const output = c.output === 'cp1' ? CP1 : H
+    const change = c.change === 'cp1' ? CP1 : 'c'.repeat(64)
     if (c.op === 'melt') return meltNote(CB, K1, 'lnbc210n1pjq', opts)
     if (c.op === 'split') {
-      return splitNoteWithHash(CB, [K1], 5000, H, 'c'.repeat(64), opts)
+      return splitNoteWithHash(CB, [K1], 5000, output, change, opts)
     }
-    return rotateNoteWithHash(CB, K1, H, opts)
+    return rotateNoteWithHash(CB, K1, output, opts)
   }
 
   const drive = (c: any) => {

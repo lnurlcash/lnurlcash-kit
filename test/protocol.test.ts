@@ -217,38 +217,37 @@ describe('rotate', () => {
     ).toBe(true)
   })
 
-  // Offline verification stopped being optional in the current draft, so a
-  // SERVICE that issues no signatures is non-compliant rather than merely
-  // basic. The refusal has to be the loud kind - but the rotate LANDED, and
-  // the fresh secret is the only key to the note it minted, so the error
-  // carries it out. Discarding it here would be the library destroying real
-  // money to make a point about conformance.
-  it('refuses an unsigned rotate without losing the note it minted', async () => {
+  // A plain hash output is unsigned by design since the Part 2 rewrite: a
+  // mint answering a rotate with a bare OK is following the spec, and the
+  // note comes back with no signature - which is exactly what it is.
+  it('accepts an unsigned rotate to a plain note by default', async () => {
+    const m = await mint({signatures: false})
+    const k1 = secret('15')
+    m.state.creditNote(k1, 21000)
+    const info = await fetchNoteInfo(noteUrl(m, k1))
+    const rotated = await rotateNote(info.callback, k1)
+    expect(rotated.signature).toBeUndefined()
+    expect(m.state.noteState(rotated.k1)).toBe('outstanding')
+  })
+
+  // A caller who still wants the old Part 1 signature over the hash can
+  // ask for it. The refusal has to be the loud kind - but the rotate
+  // LANDED, and the fresh secret is the only key to the note it minted, so
+  // the error carries it out. Discarding it here would be the library
+  // destroying real money to make a point about a signature.
+  it('refuses an unsigned rotate when asked to, without losing the note it minted', async () => {
     const m = await mint({signatures: false})
     const k1 = secret('13')
     m.state.creditNote(k1, 21000)
-    const info = await fetchNoteInfo(noteUrl(m, k1))
-    const err = await rotateNote(info.callback, k1).catch(e => e)
+    const opts = {requireSignatures: true}
+    const info = await fetchNoteInfo(noteUrl(m, k1), opts)
+    const err = await rotateNote(info.callback, k1, opts).catch(e => e)
     expect(err).toBeInstanceOf(UnverifiableNoteError)
     const kept = newSecretsOf(err)
     expect(kept).toHaveLength(1)
     // the note the caller was refused is real, outstanding, and reachable
     // with nothing but the secret the error handed back
     expect(m.state.noteState(kept[0]!)).toBe('outstanding')
-  })
-
-  // The same mint, for a caller who has decided to deal with it anyway.
-  // One option, stated once, and the note comes back unsigned - which is
-  // exactly what it is.
-  it('still works against an unsigned service when the caller opts out', async () => {
-    const m = await mint({signatures: false})
-    const k1 = secret('15')
-    m.state.creditNote(k1, 21000)
-    const opts = {requireSignatures: false}
-    const info = await fetchNoteInfo(noteUrl(m, k1), opts)
-    const rotated = await rotateNote(info.callback, k1, opts)
-    expect(rotated.signature).toBeUndefined()
-    expect(m.state.noteState(rotated.k1)).toBe('outstanding')
   })
 
   it('ignores a secret a non-compliant service tries to hand back', async () => {
