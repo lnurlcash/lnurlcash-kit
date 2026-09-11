@@ -58,14 +58,14 @@ console.log(info.maxWithdrawable, 'msat')
 // that GET put the secret on the wire, so rotate it
 const fresh = await rotateNote(info.callback, info.k1)
 
-// and check the mint really issued it, without asking anyone. Both fields
-// are guaranteed here: LUD-25 requires the mint to publish mintPubkey and
-// to sign what it mints, and this library refuses a mint that does neither.
-verifyNoteSignature(fresh.k1, info.maxWithdrawable, fresh.signature!, info.mintPubkey)
+// A plain note comes back unsigned: LUD-25 Part 2 certifies cp1 notes
+// only, and a hash has nothing to attest to without disclosing the secret.
+// To hold something a recipient can check offline, rotate into a cp1 key
+// (see Part 2 below) and verify its cs1 against info.mintPubkey.
 ```
 
 Every request function takes options last — `fetch`, `timeoutMs`, `offline`,
-`randomSecret`, `requireSignatures`, `mutationRetries`.
+`randomSecret`, `requireSignatures`, `requireMintPubkey`, `mutationRetries`.
 `createClient(options)` binds one set once:
 
 ```ts
@@ -189,12 +189,15 @@ sig     = 65 bytes, r || s || recovery_id
 ```
 
 A `withdrawRequest` publishing no `mintPubkey`, or one that is not a 33-byte
-compressed secp256k1 key, is refused with a `ProtocolError`. A mutation the
-service confirms but does not sign raises `UnverifiableNoteError` — which
-**carries the fresh secrets**, because the mutation landed and the note it
-minted is real; read them with `newSecretsOf` and persist them before
-anything else. Pass `requireSignatures: false` to deal with a mint that
-predates the requirement.
+compressed secp256k1 key, is refused with a `ProtocolError`; pass
+`requireMintPubkey: false` for a Part 1-only mint that publishes none. A
+mutation to a `cp1` output the service confirms but does not certify raises
+`UnverifiableNoteError` — which **carries the fresh secrets**, because the
+mutation landed and the note it minted is real; read them with
+`newSecretsOf` and persist them before anything else. A mutation to a plain
+hash output is unsigned by design and comes back with `signature`
+undefined; pass `requireSignatures: true` to demand the old Part 1
+signature over the hash instead, as mints issued before the Part 2 rewrite.
 
 `verifyNoteSignature` recovers the pubkey and compares it to `mintPubkey`.
 It accepts the recovery id at either end, because lnurl-mint once emitted

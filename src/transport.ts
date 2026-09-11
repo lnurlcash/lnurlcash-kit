@@ -16,17 +16,22 @@ export type LnurlcashOptions = {
   // Where replacement note secrets come from. Substitute for a hardware
   // RNG, or for deterministic tests. See secrets.ts.
   randomSecret?: RandomSecret
-  // LUD-25 makes offline verification mandatory: a SERVICE MUST publish
-  // `mintPubkey` on its withdrawRequest and MUST return `sig` (and `sig2`
-  // on a split) from every rotate, split and merge. On by default, so a
-  // mint that issues notes nobody can verify offline is a loud failure
-  // rather than a silent downgrade.
+  // LUD-25 Part 2 certifies cp1 notes only: a rotate, split or merge to a
+  // cp1 output MUST return its cs1 in `sig` (and `sig2` on a split), and
+  // this library always insists on that. A plain hash output has nothing
+  // to attest to without disclosing the secret, so it comes back unsigned
+  // by design, and `signature` is undefined.
   //
-  // Set false only to talk to a SERVICE that predates the requirement, and
-  // only knowing what it costs: an unsigned note cannot be checked by
-  // whoever it is handed to, so accepting one offline is the leap of faith
-  // the signature exists to remove.
+  // Set true to also demand the old Part 1 signature over a hash output,
+  // as every mint issued before the Part 2 rewrite. Off by default since
+  // 0.13: a mint that follows the current draft answers a plain rotate
+  // with a bare OK, and refusing that would refuse the spec.
   requireSignatures?: boolean
+  // A SERVICE publishes `mintPubkey` on its withdrawRequest so a cp1 note's
+  // certificate can be checked offline. Required by default; set false only
+  // for a Part 1-only mint that publishes none, knowing that nothing it
+  // issues can then be verified offline.
+  requireMintPubkey?: boolean
   // How many times to re-send a rotate, split or merge whose outcome the
   // transport lost. LUD-25 requires a SERVICE to answer a byte-identical
   // retry with the original success ("Retrying a mutation"), so re-sending
@@ -57,7 +62,8 @@ export const resolveOptions = (options: LnurlcashOptions = {}): ResolvedOptions 
   timeoutMs: options.timeoutMs ?? 30_000,
   offline: options.offline ?? false,
   randomSecret: options.randomSecret ?? defaultRandomSecret,
-  requireSignatures: options.requireSignatures ?? true,
+  requireSignatures: options.requireSignatures ?? false,
+  requireMintPubkey: options.requireMintPubkey ?? true,
   // A negative or non-finite count is read as none rather than thrown on:
   // this is a resilience knob, and refusing the whole operation over it
   // would be a worse answer than not retrying.

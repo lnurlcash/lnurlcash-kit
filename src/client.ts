@@ -37,10 +37,9 @@ export type WithdrawRequestInfo = {
   minWithdrawable: number
   maxWithdrawable: number
   defaultDescription?: string
-  // LUD-25 makes offline verification mandatory, so a conforming SERVICE
-  // always publishes the key its notes verify against here. Required unless
-  // the caller opts out with `requireSignatures: false`, which is the only
-  // way this arrives undefined.
+  // The key a cp1 note's certificate verifies against. Required unless the
+  // caller opts out with `requireMintPubkey: false`, which is the only way
+  // this arrives undefined.
   mintPubkey: string
   // The way home. A payRequest advertises `withdrawLink`; this is the other
   // direction, so a holder who has nothing but a note can still reach the
@@ -129,7 +128,7 @@ export const fetchNoteInfo = async (
   }
   assertWithdrawRequestShape(body, {
     requireK1: true,
-    requireMintPubkey: opts.requireSignatures
+    requireMintPubkey: opts.requireMintPubkey
   })
   // Spec MUST: the response's k1 is the bearer secret itself, never a
   // derived or opaque id. A SERVICE returning something else for the k1 it
@@ -186,7 +185,7 @@ export const fetchNoteInfoByHash = async (
   }
   assertWithdrawRequestShape(body, {
     requireK1: false,
-    requireMintPubkey: opts.requireSignatures
+    requireMintPubkey: opts.requireMintPubkey
   })
   // No echo check to make: there is no queried k1 to compare against. A
   // SERVICE that sends one anyway is not refused - it is telling the caller
@@ -562,12 +561,23 @@ const replayableCallbackRequest = async (
 // `newSecrets` is left empty here and filled in by whoever generated them:
 // the *WithHash entry points take a hash from a caller who still holds the
 // secret behind it, and have nothing to hand back.
+//
+// `output` is the p1/p2 the mutation named. A cp1 output is owed a cs1
+// certificate by LUD-25 Part 2, option or no option; a hash output is a
+// plain note, unsigned by design, and is only refused for coming back
+// unsigned when the caller asked for the old Part 1 signature.
 const requireSignature = (
   value: unknown,
   options: LnurlcashOptions,
-  what: string
+  what: string,
+  output: string
 ): string | undefined => {
   if (typeof value === 'string' && value.length > 0) return value
+  if (isCp1(output)) {
+    throw new UnverifiableNoteError(
+      `The service confirmed the ${what} to a cp1 output but returned no cs1 certificate, which LUD-25 Part 2 requires, so the note it just minted cannot be verified offline. The note exists - keep the key.`
+    )
+  }
   if (!resolveOptions(options).requireSignatures) return undefined
   throw new UnverifiableNoteError(
     `The service confirmed the ${what} but returned no signature, so the note it just minted cannot be verified offline. The note exists - keep the secret.`
@@ -648,7 +658,7 @@ export const rotateNoteWithHash = async (
     ],
     options
   )
-  return {signature: requireSignature(body.sig, options, 'rotate')}
+  return {signature: requireSignature(body.sig, options, 'rotate', h)}
 }
 
 export type HashedSplitResult = {
@@ -674,11 +684,11 @@ export const splitNoteWithHash = async (
     ],
     options
   )
-  // Both outputs of a split are notes, and both need a signature. Checked
-  // in output order so the message names the one actually missing.
+  // Both outputs of a split are notes, and each is owed what its kind is
+  // owed. Checked in output order so the message names the one missing.
   return {
-    signature: requireSignature(body.sig, options, 'split'),
-    changeSignature: requireSignature(body.sig2, options, "split's change")
+    signature: requireSignature(body.sig, options, 'split', h),
+    changeSignature: requireSignature(body.sig2, options, "split's change", h2)
   }
 }
 
@@ -693,7 +703,7 @@ export const mergeNotesWithHash = async (
     [...k1s.map((k1): [string, string] => ['k1', k1]), outputParam(h, 1)],
     options
   )
-  return {signature: requireSignature(body.sig, options, 'merge')}
+  return {signature: requireSignature(body.sig, options, 'merge', h)}
 }
 
 // ---- the generating primitives ----

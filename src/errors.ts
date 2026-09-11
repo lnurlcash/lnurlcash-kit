@@ -129,7 +129,9 @@ export class AmbiguousMintError extends LnurlcashError {}
 // money to make a point about conformance. Persist them, then decide
 // whether to keep dealing with a mint that issues notes nobody can check.
 //
-// Only ever raised when `requireSignatures` is on, which is the default.
+// Raised for a cp1 output that came back without its cs1 certificate, which
+// LUD-25 Part 2 requires, and for a hash output that came back unsigned
+// when `requireSignatures` asked for the old Part 1 signature.
 export class UnverifiableNoteError extends LnurlcashError {
   newSecrets: string[]
   constructor(message: string, newSecrets: string[] = []) {
