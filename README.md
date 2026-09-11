@@ -373,6 +373,54 @@ them for you.
 The seed is bearer material for every note the wallet will ever hold. Store
 it the way you store the notes, and never log it.
 
+## Notes keyed by a public key (LUD-25 Part 2)
+
+A Part 2 note swaps the hash for a key pair. The wallet keeps `sk`. The mint
+only ever sees `pk`, written `cp1…`. To spend the note you hand over `ck1…`,
+a recoverable signature by `sk` over the fixed message `LNURLcash`, and the
+mint recovers `pk` from it to find the note. The mint's certificate, `cs1…`,
+is the same signature mints already make, over `hex(pk)` instead of a hash.
+So a recipient can check a note offline with nothing but `ck1` and `cs1`.
+
+This release has the building blocks: the four encodings, key derivation and
+ownership signatures. The wire calls that mint to `cp1` and spend with `ck1`
+come next. The names match lnurl-wallet's `src/lib`, so moving to it later is
+an import change.
+
+```ts
+import {
+  deriveCashRoot, deriveCashAddressNode, cashNodeToCx1, encodeCx1,
+  deriveNotePubkey, deriveNoteSecretKey, signNoteOwnership, encodeCk1,
+  verifyNoteSignature
+} from 'lnurlcash-kit'
+
+const node = deriveCashAddressNode(deriveCashRoot(seed), 'mint.example')
+const {pubkeyXOnly, chainCode} = cashNodeToCx1(node)
+const cx1 = encodeCx1(pubkeyXOnly, chainCode)             // watch-only
+
+const pk = deriveNotePubkey(pubkeyXOnly, chainCode, i)     // what a watcher derives
+const sk = deriveNoteSecretKey(node.privateKey, node.chainCode, i)
+const ck1 = encodeCk1(signNoteOwnership(sk))              // the bearer secret
+
+verifyNoteSignature(ck1, amountMsat, cs1, mintPubkey)     // offline
+```
+
+Three things worth knowing:
+
+- **The branch path follows the reference wallet, not the spec text.** It is
+  `m/139'/1'/d1/d2/d3/d4`, with the hashing key at `m/139'/1'/0`. The spec
+  says `m/139'/d1..d4`, which is the node the Part 1 ladder already uses, and
+  a wallet following it finds none of lnurl-wallet's notes.
+- **A `cx1` links every note on its branch.** It cannot spend anything, but
+  whoever holds it can list every key on the branch and ask the mint about
+  each one. Register it with a mint and that mint sees everything paid to the
+  address. Use the branch for receiving and rotate off it.
+- **`i` is any uint32**, serialised as 4 bytes big-endian, never hardened.
+  lnurl-wallet and lnurl-mint agree on that; the spec does not say.
+
+`test/vectors/part2.json` was generated from lnurl-wallet and checked against
+lnurl-mint. It moves into lnurlcash-conformance next.
+
 ## Minting a note you named yourself
 
 By default the secret of a freshly minted note is the invoice's payment

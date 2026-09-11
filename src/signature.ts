@@ -2,6 +2,7 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {hashK1} from './secrets.js'
+import {decodeCk1, decodeCs1, recoverNoteOwnershipPubkey} from './recoverable.js'
 
 // ---- LUD-25 offline verification ----
 //
@@ -91,13 +92,25 @@ export const verifyNoteSignatureAgainst = (
   signatureHex: string,
   mintPubkeys: string | string[]
 ): SignatureCheck => {
-  let h: string
-  try {
-    h = hashK1(k1)
-  } catch {
-    return NO_MATCH
-  }
+  const h = signedNoteId(k1)
+  if (h === null) return NO_MATCH
   return verifyNoteSignatureHashAgainst(h, amountMsat, signatureHex, mintPubkeys)
+}
+
+// What the SERVICE signed over: sha256(k1) for a Part 1 note, and for a
+// Part 2 note (k1 is a ck1) the public key its ownership signature recovers
+// to. Recovered locally, so checking a Part 2 note needs no network either.
+const signedNoteId = (k1: string): string | null => {
+  const ownership = decodeCk1(k1)
+  if (ownership) {
+    const pubkey = recoverNoteOwnershipPubkey(ownership)
+    return pubkey ? bytesToHex(pubkey) : null
+  }
+  try {
+    return hashK1(k1)
+  } catch {
+    return null
+  }
 }
 
 export const verifyNoteSignatureHashAgainst = (
@@ -112,11 +125,17 @@ export const verifyNoteSignatureHashAgainst = (
   // Nothing to verify against is a "no", not a pass. A caller that reaches
   // here with an empty history has no trusted key at all.
   if (targets.length === 0) return NO_MATCH
+  // a Part 2 note's certificate arrives as cs1, the same 65 bytes encoded
   let wireSig: Uint8Array
-  try {
-    wireSig = hexToBytes(signatureHex)
-  } catch {
-    return NO_MATCH
+  const certificate = decodeCs1(signatureHex)
+  if (certificate) {
+    wireSig = certificate
+  } else {
+    try {
+      wireSig = hexToBytes(signatureHex)
+    } catch {
+      return NO_MATCH
+    }
   }
   if (wireSig.length !== 65) return NO_MATCH
   // a malformed k1 (non-hex) makes the hashing throw - an unverifiable
