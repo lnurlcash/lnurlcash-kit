@@ -1,4 +1,5 @@
 import {readFileSync} from 'node:fs'
+import {createRequire} from 'node:module'
 import {describe, expect, it} from 'vitest'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {cashNodeToHex, deriveCashDomainNode, deriveCashRoot} from '../src/cash.js'
@@ -24,11 +25,13 @@ import {
 } from '../src/recoverable.js'
 import {verifyNoteSignature, verifyNoteSignatureHash} from '../src/signature.js'
 
-// Generated from lnurl-wallet's own code and checked against lnurl-mint's;
-// see the file's `source` and `conventions`.
-const vectors = JSON.parse(
-  readFileSync(new URL('./vectors/part2.json', import.meta.url), 'utf8')
-)
+// lnurlcash-conformance's Part 2 vectors: built from the primitives there,
+// and identical to vectors generated from lnurl-wallet's own code and checked
+// against lnurl-mint's. See the file's `conventions`.
+const require = createRequire(import.meta.url)
+const conformance = (name: string) =>
+  JSON.parse(readFileSync(require.resolve(`lnurlcash-conformance/vectors/${name}`), 'utf8'))
+const vectors = conformance('part2.json')
 
 type NoteVector = {
   index: number
@@ -39,7 +42,7 @@ type NoteVector = {
   ck1: string
 }
 type BranchVector = {
-  seed: string
+  seedHex: string
   cashRoot: string
   host: string
   addressNode: string
@@ -60,7 +63,7 @@ describe('the address branch', () => {
 
   for (const b of branches) {
     it(`derives lnurl-wallet's branch for ${b.host}`, () => {
-      const root = deriveCashRoot(hexToBytes(b.seed))
+      const root = deriveCashRoot(hexToBytes(b.seedHex))
       expect(cashNodeToHex(root)).toBe(b.cashRoot)
       const node = deriveCashAddressNode(root, b.host)
       expect(cashNodeToHex(node)).toBe(b.addressNode)
@@ -73,7 +76,7 @@ describe('the address branch', () => {
 
   it('never shares a node with the Part 1 ladder', () => {
     const b = branches[0]!
-    const root = deriveCashRoot(hexToBytes(b.seed))
+    const root = deriveCashRoot(hexToBytes(b.seedHex))
     expect(cashNodeToHex(deriveCashAddressNode(root, b.host))).not.toBe(
       cashNodeToHex(deriveCashDomainNode(root, b.host))
     )
@@ -146,7 +149,7 @@ describe('mint certificates', () => {
 })
 
 describe('encodings', () => {
-  const decoders = {cp1: decodeCp1, ck1: decodeCk1, cx1: decodeCx1} as const
+  const decoders = {cp1: decodeCp1, ck1: decodeCk1, cs1: decodeCs1, cx1: decodeCx1} as const
 
   for (const bad of vectors.invalid as {type: keyof typeof decoders; value: string; why: string}[]) {
     it(`refuses ${bad.type}: ${bad.why}`, () => {
@@ -183,9 +186,10 @@ describe('encodings', () => {
 })
 
 describe('a branch rooted in a Nostr key', () => {
-  // The same file heartwood-esp32's cash_key.rs grades against: the device
-  // and this kit have to derive one branch from one identity key.
-  const nostrVectors = JSON.parse(readFileSync(new URL('./vectors/nostr-seed.json', import.meta.url), 'utf8')) as {
+  // Conformance's extension file, and the same values heartwood-esp32's
+  // cash_key.rs grades against: the device and this kit have to derive one
+  // branch from one identity key.
+  const nostrVectors = conformance('nostr-seed.json') as {
     cases: {
       identity: string
       host: string

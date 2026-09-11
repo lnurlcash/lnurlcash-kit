@@ -1,4 +1,5 @@
 import {readFileSync} from 'node:fs'
+import {createRequire} from 'node:module'
 import {describe, expect, it} from 'vitest'
 import {
   RequestRefusedError,
@@ -16,7 +17,9 @@ import {
 } from '../src/index.js'
 
 // The Part 2 wire: a ck1 wherever a k1 goes, a cp1 wherever an output goes.
-const vectors = JSON.parse(readFileSync(new URL('./vectors/part2.json', import.meta.url), 'utf8'))
+const vectors = JSON.parse(
+  readFileSync(createRequire(import.meta.url).resolve('lnurlcash-conformance/vectors/part2.json'), 'utf8')
+)
 const [a, b, c] = vectors.branches[0].notes as {notePubkey: string; cp1: string; ck1: string}[]
 const cs1 = vectors.certificates[0].cs1 as string
 const K1 = '11'.repeat(32)

@@ -19,8 +19,9 @@ import {hashK1, isPreimage} from './secrets.js'
 // (recoverableNotes.ts and signature.ts), which is expected to become the
 // shared TypeScript kit, so moving to it is an import change. Where the spec
 // and that code disagree, this follows the code: see `deriveCashAddressNode`.
-// test/vectors/part2.json was generated from lnurl-wallet and checked
-// against lnurl-mint.
+// Graded against lnurlcash-conformance's vectors/part2.json, which is built
+// from the primitives and matches vectors generated from lnurl-wallet and
+// checked against lnurl-mint.
 
 // ---- bech32m ----
 //
@@ -251,7 +252,7 @@ export const cashNodeToCx1 = (node: CashNode): Cx1 => ({
 //
 // then lnurl-wallet's address path from that seed, unchanged. heartwood-esp32
 // derives exactly this on the device (common/src/cash_key.rs), and
-// test/vectors/nostr-seed.json is the same file its tests grade against. The
+// lnurlcash-conformance's vectors/nostr-seed.json holds both to it. The
 // identity key rebuilds every note paid to the branch, so whoever can restore
 // that key - from an nsec or the phrase it came from - can recover the notes,
 // with or without the device that received them. Not part of LUD-25.
