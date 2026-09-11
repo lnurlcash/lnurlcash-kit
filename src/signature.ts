@@ -1,8 +1,7 @@
 import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
-import {hashK1} from './secrets.js'
-import {decodeCk1, decodeCs1, recoverNoteOwnershipPubkey} from './recoverable.js'
+import {decodeCs1, noteIdOf} from './recoverable.js'
 
 // ---- LUD-25 offline verification ----
 //
@@ -25,8 +24,16 @@ import {decodeCk1, decodeCs1, recoverNoteOwnershipPubkey} from './recoverable.js
 
 const LIGHTNING_SIGNED_MESSAGE_PREFIX = utf8ToBytes('Lightning Signed Message:')
 
+// The note id a SERVICE signs over: sha256(k1), or for a Part 2 `ck1` the
+// key it recovers to. Throws on anything else, as hashing a non-hex k1 did.
+const requireNoteId = (k1: string): string => {
+  const id = noteIdOf(k1)
+  if (id === null) throw new Error('A k1 is 32 bytes of hex or a ck1.')
+  return id
+}
+
 export const noteSignatureMessage = (k1: string, amountMsat: number): string =>
-  noteSignatureMessageForHash(hashK1(k1), amountMsat)
+  noteSignatureMessageForHash(requireNoteId(k1), amountMsat)
 
 // The same message when the caller already has the note id rather than its
 // secret. A bound mint quote deliberately discloses h, not k1, so its
@@ -40,7 +47,7 @@ export const noteSignatureMessageForHash = (
 export const noteSignatureDigest = (
   k1: string,
   amountMsat: number
-): Uint8Array => noteSignatureDigestForHash(hashK1(k1), amountMsat)
+): Uint8Array => noteSignatureDigestForHash(requireNoteId(k1), amountMsat)
 
 export const noteSignatureDigestForHash = (
   h: string,
@@ -92,25 +99,11 @@ export const verifyNoteSignatureAgainst = (
   signatureHex: string,
   mintPubkeys: string | string[]
 ): SignatureCheck => {
-  const h = signedNoteId(k1)
+  // A Part 2 note's id is the key its ck1 recovers to, found locally, so
+  // checking one needs no network either.
+  const h = noteIdOf(k1)
   if (h === null) return NO_MATCH
   return verifyNoteSignatureHashAgainst(h, amountMsat, signatureHex, mintPubkeys)
-}
-
-// What the SERVICE signed over: sha256(k1) for a Part 1 note, and for a
-// Part 2 note (k1 is a ck1) the public key its ownership signature recovers
-// to. Recovered locally, so checking a Part 2 note needs no network either.
-const signedNoteId = (k1: string): string | null => {
-  const ownership = decodeCk1(k1)
-  if (ownership) {
-    const pubkey = recoverNoteOwnershipPubkey(ownership)
-    return pubkey ? bytesToHex(pubkey) : null
-  }
-  try {
-    return hashK1(k1)
-  } catch {
-    return null
-  }
 }
 
 export const verifyNoteSignatureHashAgainst = (

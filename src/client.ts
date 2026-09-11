@@ -19,6 +19,7 @@ import {
   type ResolvedOptions
 } from './transport.js'
 import {hashK1, isPreimage} from './secrets.js'
+import {isCp1} from './recoverable.js'
 import {buildNoteInfoUrlByHash, buildNoteUrl, noteK1, withNewK1} from './note.js'
 import {decodeBolt11AmountMsat, sameInvoice} from './bolt11.js'
 import {parseMintFee, type MintFee} from './fees.js'
@@ -615,6 +616,17 @@ export const meltNote = async (
 
 export type HashedMutationResult = {signature?: string}
 
+// An output is a hash, or a Part 2 `cp1` key. LUD-25 renamed the callback's
+// `h`/`h2` to `p1`/`p2`; a hash keeps the old names, which every mint
+// accepts, and a key goes as `p1`/`p2`, which only a Part 2 mint takes
+// anyway. Per value, never a version flag. Same rule as lnurl-wallet.
+const outputParam = (value: string, which: 1 | 2): [string, string] => {
+  const cp1 = isCp1(value.trim().toLowerCase())
+  return [cp1 ? `p${which}` : which === 1 ? 'h' : 'h2', value]
+}
+
+// A `k1` input may be a Part 1 secret or a Part 2 `ck1`; the SERVICE tells
+// them apart by shape. Both pass through untouched.
 export const rotateNoteWithHash = async (
   callback: string,
   k1: string,
@@ -625,7 +637,7 @@ export const rotateNoteWithHash = async (
     callback,
     [
       ['k1', k1],
-      ['h', h]
+      outputParam(h, 1)
     ],
     options
   )
@@ -650,8 +662,8 @@ export const splitNoteWithHash = async (
     [
       ...k1s.map((k1): [string, string] => ['k1', k1]),
       ['amount', String(amountMsat)],
-      ['h', h],
-      ['h2', h2]
+      outputParam(h, 1),
+      outputParam(h2, 2)
     ],
     options
   )
@@ -671,7 +683,7 @@ export const mergeNotesWithHash = async (
 ): Promise<HashedMutationResult> => {
   const body = await replayableCallbackRequest(
     callback,
-    [...k1s.map((k1): [string, string] => ['k1', k1]), ['h', h]],
+    [...k1s.map((k1): [string, string] => ['k1', k1]), outputParam(h, 1)],
     options
   )
   return {signature: requireSignature(body.sig, options, 'merge')}
@@ -1167,19 +1179,24 @@ export const requestInvoice = async (
   const cbUrl = new URL(payCallback)
   cbUrl.searchParams.set('amount', String(amountMsat))
   if (options.h !== undefined) {
-    if (!isPreimage(options.h)) {
-      throw new RequestRefusedError(
-        'An output hash must be 32 bytes of hex - no invoice was requested.'
-      )
-    }
     // lowercase for the same reason a note's k1 is normalised: it is
     // bytes, not text, and a SERVICE storing notes under the hash it was
     // given should be given one spelling of it
     const h = options.h.trim().toLowerCase()
-    // LUD-25 names the output with a LUD-12 comment. `h` repeats the exact
-    // same value for services that expose the additive receipt extension.
-    cbUrl.searchParams.set('comment', h)
-    cbUrl.searchParams.set('h', h)
+    if (isCp1(h)) {
+      // LUD-25 Part 2: mint to a key. Only the comment carries it; `h` is a
+      // hash-only extension a mint may refuse a key under.
+      cbUrl.searchParams.set('comment', h)
+    } else if (isPreimage(h)) {
+      // LUD-25 names the output with a LUD-12 comment. `h` repeats the exact
+      // same value for services that expose the additive receipt extension.
+      cbUrl.searchParams.set('comment', h)
+      cbUrl.searchParams.set('h', h)
+    } else {
+      throw new RequestRefusedError(
+        'An output must be 32 bytes of hex or a cp1 key - no invoice was requested.'
+      )
+    }
   }
   const body = await lnurlFetch(cbUrl, resolveOptions(options))
   if (typeof body?.pr !== 'string') {

@@ -3,6 +3,7 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {bech32m} from '@scure/base'
 import {deriveCashChild, deriveCashDomainNode, type CashNode} from './cash.js'
+import {hashK1, isPreimage} from './secrets.js'
 
 // ---- LUD-25 Part 2: recoverable signatures ----
 //
@@ -194,6 +195,30 @@ export const recoverNoteOwnershipPubkey = (signature: Uint8Array): Uint8Array | 
   } catch {
     return null
   }
+}
+
+// ---- a note's k1, either kind ----
+
+// The id a SERVICE files a note under: sha256(k1) for a Part 1 secret, and
+// the recovered public key for a Part 2 `ck1`. Null for anything else,
+// including a `ck1` that does not recover. Two different `ck1` strings can
+// share an id, so compare notes by this, never by k1.
+export const noteIdOf = (k1: string): string | null => {
+  if (typeof k1 !== 'string') return null
+  const value = k1.trim().toLowerCase()
+  if (isPreimage(value)) return hashK1(value)
+  const signature = decodeCk1(value)
+  const pubkey = signature ? recoverNoteOwnershipPubkey(signature) : null
+  return pubkey ? bytesToHex(pubkey) : null
+}
+
+// What to look a note up by without disclosing it: the hash for a Part 1
+// secret, and for a Part 2 note its `cp1`, which also brings its certificate
+// back. Pass it to `fetchNoteInfoByHash`.
+export const noteLookupOf = (k1: string): string | null => {
+  const id = noteIdOf(k1)
+  if (id === null) return null
+  return isCk1(k1.trim().toLowerCase()) ? encodeCp1(hexToBytes(id)) : id
 }
 
 // ---- the address branch ----

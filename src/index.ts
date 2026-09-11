@@ -95,6 +95,8 @@ export {
   deriveNoteSecretKey,
   signNoteOwnership,
   recoverNoteOwnershipPubkey,
+  noteIdOf,
+  noteLookupOf,
   deriveCashAddressNode,
   cashNodeToCx1,
   type Cx1
