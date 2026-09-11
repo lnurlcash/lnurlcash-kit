@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.1 - 2026-09-11
 
 - `fetchNoteInfo` compares the mint's echoed `k1` with the one it asked
   about as the note each names (`noteIdOf`), not as strings. One Part 2 note
