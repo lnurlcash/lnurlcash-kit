@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 - 2026-09-11
 
 **The wire calls take LUD-25 Part 2 notes.**
 
