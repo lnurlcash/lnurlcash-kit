@@ -1,5 +1,5 @@
 import {fromLud17, resolveLnurlInput} from './urls.js'
-import {isPreimage} from './secrets.js'
+import {isCp1, noteIdOf} from './recoverable.js'
 
 // A note is its withdraw LNURL with the secret as the k1 query parameter.
 // k1 is normalised to lowercase hex: it is bytes, not text, so casing
@@ -52,13 +52,13 @@ export const noteSignature = (url: string): string | null => {
 }
 
 // Input only qualifies as a note if it resolves to a URL carrying a
-// well-formed k1: 32 bytes hex. A k1 that is not hex would throw during
-// hashing later - in offline signature verification while rendering, say -
-// so it is refused at the door.
+// well-formed k1: 32 bytes hex, or a Part 2 `ck1` that recovers to a key.
+// Anything else would throw during hashing later - in offline signature
+// verification while rendering, say - so it is refused at the door.
 export const resolveNoteInput = (value: string): string | null => {
   const url = resolveLnurlInput(value)
   const k1 = url ? noteK1(url) : null
-  if (!url || !k1 || !isPreimage(k1)) return null
+  if (!url || !k1 || noteIdOf(k1) === null) return null
   return url
 }
 
@@ -79,16 +79,21 @@ export const isValidNoteInput = (value: string): boolean =>
 // `amount` and `sig` are dropped rather than carried. Neither is read on an
 // informational GET, and both would narrow a lookup whose whole purpose is
 // to disclose as little as possible.
+//
+// `h` may also be a Part 2 `cp1` key, sent as `p`, the name LUD-25 now uses.
+// A hash keeps the older `h`, which every mint that ever took a hash lookup
+// understands. Same rule as lnurl-wallet.
 export const buildNoteInfoUrlByHash = (withdrawLink: string, h: string): string => {
-  const hex = h.trim().toLowerCase()
-  if (!/^[0-9a-f]{64}$/.test(hex)) {
-    throw new Error('A note hash must be 32 bytes of hex.')
+  const value = h.trim().toLowerCase()
+  const key = isCp1(value)
+  if (!key && !/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error('A note hash must be 32 bytes of hex, or a cp1 key.')
   }
   const url = new URL(fromLud17(withdrawLink.trim()))
   url.searchParams.delete('k1')
   url.searchParams.delete('amount')
   url.searchParams.delete('sig')
-  url.searchParams.set('h', hex)
+  url.searchParams.set(key ? 'p' : 'h', value)
   return url.toString()
 }
 

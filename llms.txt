@@ -64,6 +64,11 @@ deriveNoteSecretKey(p, chainCode, i) -> sk negates p first when P has odd y
 signNoteOwnership(sk) -> 65 bytes          RFC6979 over fixed "LNURLcash"
 recoverNoteOwnershipPubkey(sig) -> pk | null
 verifyNoteSignature also takes a ck1 as k1 and a cs1 as the signature
+noteIdOf(k1) -> id | null   sha256(k1) for a secret, the recovered key for a
+  ck1. One note has many valid ck1 strings: compare notes by this, not by k1
+noteLookupOf(k1) -> string  hash, or cp1 for a ck1; for fetchNoteInfoByHash
+Wire: a ck1 goes wherever a k1 does; a cp1 wherever an output does
+  (requestInvoice h, *WithHash outputs: cp1 sent as p1/p2, hash as h/h2)
 deriveNoteRoot(seedBytes) -> Uint8Array    LEGACY, pre-spec. Do not mint under
 deriveNoteSecret(root, host, index) -> k1  it; still scanned so old notes live.
 derivedSecretSource(root, host, start) -> RandomSecret & {index()}

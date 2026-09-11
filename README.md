@@ -382,10 +382,14 @@ mint recovers `pk` from it to find the note. The mint's certificate, `cs1…`,
 is the same signature mints already make, over `hex(pk)` instead of a hash.
 So a recipient can check a note offline with nothing but `ck1` and `cs1`.
 
-This release has the building blocks: the four encodings, key derivation and
-ownership signatures. The wire calls that mint to `cp1` and spend with `ck1`
-come next. The names match lnurl-wallet's `src/lib`, so moving to it later is
-an import change.
+The wire calls take both kinds. A `ck1` goes anywhere a `k1` does: a note
+URL, `fetchNoteInfo`, rotate, split, merge and melt. A `cp1` goes anywhere an
+output does: `requestInvoice`'s `h`, and the output of every `*WithHash` call,
+where it is sent as `p1`/`p2` while a hash keeps `h`/`h2`, the same rule as
+lnurl-wallet. `noteIdOf(k1)` gives the id a mint files either kind under, and
+`noteLookupOf(k1)` what to pass `fetchNoteInfoByHash` to check a note without
+disclosing it. The names match lnurl-wallet's `src/lib`, so moving to it
+later is an import change.
 
 ```ts
 import {

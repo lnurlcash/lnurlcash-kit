@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+**The wire calls take LUD-25 Part 2 notes.**
+
+- A `ck1` goes anywhere a `k1` does. `resolveNoteInput` accepts a note URL
+  carrying one, and rotate, split, merge, melt and `fetchNoteInfo` pass it
+  through.
+- A `cp1` goes anywhere an output does. `requestInvoice` sends it as the
+  comment alone. The `*WithHash` calls send it as `p1`/`p2`, while a hash
+  keeps `h`/`h2`, which every mint understands. That is lnurl-wallet's rule.
+- `fetchNoteInfoByHash` and `buildNoteInfoUrlByHash` take a `cp1`, sent as
+  `p`.
+- `noteIdOf(k1)` is the id a mint files a note under, for either kind.
+  `noteLookupOf(k1)` is what to look it up by without disclosing it.
+- `noteSignatureMessage` and `noteSignatureDigest` build the message over the
+  key for a `ck1`.
+
 ## 0.10.0 - 2026-09-11
 
 **LUD-25 Part 2 building blocks.** Notes keyed by a public key and spent by a
