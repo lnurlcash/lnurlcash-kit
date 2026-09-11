@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `deriveNostrCashSeed(secretKey)` and `deriveNostrAddressNode(secretKey,
+  host)`: a Part 2 address branch rooted in a Nostr identity key, for a holder
+  with no BIP-39 words. The seed is `HMAC-SHA256(key, "LNURLcash/nostr-seed")`
+  and the path from it is the reference wallet's. heartwood-esp32 derives the
+  same branch on the device, and `test/vectors/nostr-seed.json` is the file
+  both grade against.
+
 ## 0.11.0 - 2026-09-11
 
 **The wire calls take LUD-25 Part 2 notes.**

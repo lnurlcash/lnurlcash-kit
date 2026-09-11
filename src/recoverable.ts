@@ -1,8 +1,9 @@
 import {secp256k1} from '@noble/curves/secp256k1.js'
+import {hmac} from '@noble/hashes/hmac.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {bech32m} from '@scure/base'
-import {deriveCashChild, deriveCashDomainNode, type CashNode} from './cash.js'
+import {deriveCashChild, deriveCashDomainNode, deriveCashRoot, type CashNode} from './cash.js'
 import {hashK1, isPreimage} from './secrets.js'
 
 // ---- LUD-25 Part 2: recoverable signatures ----
@@ -239,3 +240,32 @@ export const cashNodeToCx1 = (node: CashNode): Cx1 => ({
   pubkeyXOnly: secp256k1.getPublicKey(node.privateKey, true).slice(1),
   chainCode: node.chainCode.slice()
 })
+
+// ---- a branch rooted in a Nostr key ----
+//
+// A lightning address on a Nostr-native mint belongs to an npub, and a holder
+// with no BIP-39 words - a hardware signer that keeps only its identity key,
+// or a wallet that never made any - can still be paid to keys of its own:
+//
+//   seed = HMAC-SHA256(key = the identity's secret key, msg = "LNURLcash/nostr-seed")
+//
+// then lnurl-wallet's address path from that seed, unchanged. heartwood-esp32
+// derives exactly this on the device (common/src/cash_key.rs), and
+// test/vectors/nostr-seed.json is the same file its tests grade against. The
+// identity key rebuilds every note paid to the branch, so whoever can restore
+// that key - from an nsec or the phrase it came from - can recover the notes,
+// with or without the device that received them. Not part of LUD-25.
+
+export const NOSTR_CASH_SEED_LABEL = 'LNURLcash/nostr-seed'
+
+export const deriveNostrCashSeed = (secretKey: Uint8Array): Uint8Array => {
+  if (!(secretKey instanceof Uint8Array) || secretKey.length !== 32) {
+    throw new RangeError('A Nostr secret key is 32 bytes.')
+  }
+  return hmac(sha256, secretKey, utf8ToBytes(NOSTR_CASH_SEED_LABEL))
+}
+
+// One mint's address branch for a Nostr identity. Bearer material, like any
+// address node: hand out `cashNodeToCx1` of it.
+export const deriveNostrAddressNode = (secretKey: Uint8Array, host: string): CashNode =>
+  deriveCashAddressNode(deriveCashRoot(deriveNostrCashSeed(secretKey)), host)

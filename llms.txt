@@ -64,6 +64,9 @@ deriveNoteSecretKey(p, chainCode, i) -> sk negates p first when P has odd y
 signNoteOwnership(sk) -> 65 bytes          RFC6979 over fixed "LNURLcash"
 recoverNoteOwnershipPubkey(sig) -> pk | null
 verifyNoteSignature also takes a ck1 as k1 and a cs1 as the signature
+deriveNostrCashSeed(secretKey) -> 32-byte seed   HMAC-SHA256(key, "LNURLcash/nostr-seed")
+deriveNostrAddressNode(secretKey, host) -> CashNode   the address path from that seed;
+  a branch for a holder with no BIP-39 words (heartwood-esp32 derives the same)
 noteIdOf(k1) -> id | null   sha256(k1) for a secret, the recovered key for a
   ck1. One note has many valid ck1 strings: compare notes by this, not by k1
 noteLookupOf(k1) -> string  hash, or cp1 for a ck1; for fetchNoteInfoByHash

@@ -425,6 +425,16 @@ Three things worth knowing:
 `test/vectors/part2.json` was generated from lnurl-wallet and checked against
 lnurl-mint. It moves into lnurlcash-conformance next.
 
+**A branch rooted in a Nostr key.** A holder with no BIP-39 words, such as a
+hardware signer that keeps only its identity key, or a wallet that never made
+any, can still be paid to keys of its own. `deriveNostrAddressNode(secretKey,
+host)` takes the branch from the key that owns the lightning address:
+`HMAC-SHA256(key = secret key, msg = "LNURLcash/nostr-seed")`, then the path
+above unchanged. heartwood-esp32 derives exactly this on the device, graded
+against the same `test/vectors/nostr-seed.json`, so its notes come back from
+its nsec (or the phrase the nsec came from) without the device. This is ours,
+not LUD-25's; a mint sees an ordinary `cx1` either way.
+
 ## Minting a note you named yourself
 
 By default the secret of a freshly minted note is the invoice's payment
