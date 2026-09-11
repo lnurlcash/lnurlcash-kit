@@ -19,7 +19,7 @@ import {
   type ResolvedOptions
 } from './transport.js'
 import {hashK1, isPreimage} from './secrets.js'
-import {isCp1} from './recoverable.js'
+import {isCp1, noteIdOf} from './recoverable.js'
 import {buildNoteInfoUrlByHash, buildNoteUrl, noteK1, withNewK1} from './note.js'
 import {decodeBolt11AmountMsat, sameInvoice} from './bolt11.js'
 import {parseMintFee, type MintFee} from './fees.js'
@@ -135,8 +135,15 @@ export const fetchNoteInfo = async (
   // derived or opaque id. A SERVICE returning something else for the k1 it
   // was queried with is non-compliant - or the note was rotated by
   // somebody else, which matters even more.
+  //
+  // Compared as the note each names, not as strings. One Part 2 note has
+  // many valid ck1s - anyone can turn one into its high-S twin, and its
+  // holder can re-sign - so a mint echoing another spelling of the same note
+  // is no mismatch. A Part 1 secret's id is its hash, so for those this is
+  // the comparison it always was.
   const queried = noteK1(url)
-  if (queried && body.k1.toLowerCase() !== queried) {
+  const echoed = noteIdOf(body.k1)
+  if (queried && (echoed === null || echoed !== noteIdOf(queried))) {
     throw new ProtocolError(
       "The service echoed back a different k1 than was queried - the note may have been redeemed elsewhere, or the service isn't spec-compliant."
     )

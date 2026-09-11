@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `fetchNoteInfo` compares the mint's echoed `k1` with the one it asked
+  about as the note each names (`noteIdOf`), not as strings. One Part 2 note
+  has many valid `ck1`s: anyone can turn one into its high-S twin, and its
+  holder can re-sign, so a mint echoing another spelling of the same note
+  was reported as having handed back a different note. An echo that names no
+  note at all is still refused, and a Part 1 secret compares as it always did.
+
 ## 0.12.0 - 2026-09-11
 
 **A Part 2 branch rooted in a Nostr key.**

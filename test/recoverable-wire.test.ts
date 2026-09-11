@@ -1,9 +1,14 @@
 import {readFileSync} from 'node:fs'
 import {createRequire} from 'node:module'
 import {describe, expect, it} from 'vitest'
+import {secp256k1} from '@noble/curves/secp256k1.js'
+import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {
   RequestRefusedError,
   buildNoteInfoUrlByHash,
+  decodeCk1,
+  encodeCk1,
+  fetchNoteInfo,
   fetchNoteInfoByHash,
   hashK1,
   mergeNotesWithHash,
@@ -145,5 +150,51 @@ describe('minting to a key', () => {
       RequestRefusedError
     )
     expect(urls).toHaveLength(0)
+  })
+})
+
+describe('the echo of a note looked up by its ck1', () => {
+  // Another spelling of the same note: s -> n - s, with the recovery id's
+  // parity bit flipped. It recovers to the same key.
+  const highSTwin = (ck1: string): string => {
+    const sig = decodeCk1(ck1)!
+    const n = secp256k1.Point.Fn.ORDER
+    const s = BigInt(`0x${bytesToHex(sig.subarray(32, 64))}`)
+    const twin = new Uint8Array(sig)
+    twin.set(hexToBytes((n - s).toString(16).padStart(64, '0')), 32)
+    twin[64] = sig[64]! ^ 1
+    return encodeCk1(twin)
+  }
+  const info = (k1: string) => ({
+    tag: 'withdrawRequest',
+    callback: CB,
+    k1,
+    minWithdrawable: 1000,
+    maxWithdrawable: 21000,
+    defaultDescription: 'a note',
+    mintPubkey: vectors.mint.mintPubkey
+  })
+
+  it('accepts another spelling of the same note', async () => {
+    const twin = highSTwin(a!.ck1)
+    expect(twin).not.toBe(a!.ck1)
+    expect(noteIdOf(twin)).toBe(a!.notePubkey)
+    const {fetch} = capture(info(twin))
+    const got = await fetchNoteInfo(`https://mint.example/w?k1=${a!.ck1}`, {fetch})
+    expect(got.maxWithdrawable).toBe(21000)
+  })
+
+  it('refuses a different note, or an echo that names none', async () => {
+    for (const echoed of [b!.ck1, K1, 'not a note']) {
+      const {fetch} = capture(info(echoed))
+      await expect(fetchNoteInfo(`https://mint.example/w?k1=${a!.ck1}`, {fetch})).rejects.toThrow('different k1')
+    }
+  })
+
+  it('still compares a Part 1 secret the way it always did', async () => {
+    const {fetch} = capture(info(K1.toUpperCase()))
+    expect((await fetchNoteInfo(`https://mint.example/w?k1=${K1}`, {fetch})).k1).toBe(K1.toUpperCase())
+    const {fetch: other} = capture(info('22'.repeat(32)))
+    await expect(fetchNoteInfo(`https://mint.example/w?k1=${K1}`, {fetch: other})).rejects.toThrow('different k1')
   })
 })
