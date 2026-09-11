@@ -122,6 +122,14 @@ describe('LUD-25 seed-recoverable note secrets', () => {
     expect(cashNodeToHex(deriveCashRoot(SEED))).toBe(CASH_ROOT)
   })
 
+  it('derives the vector 1 master from its seed', async () => {
+    const {deriveCashMaster, cashNodeToHex} = await import('../src/cash.js')
+    expect(cashNodeToHex(deriveCashMaster(hexToBytes('000102030405060708090a0b0c0d0e0f')))).toBe(
+      'e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35' +
+        '873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508'
+    )
+  })
+
   it('rejects a seed outside BIP-32 range', () => {
     expect(() => deriveCashRoot(new Uint8Array(15))).toThrow(RangeError)
     expect(() => deriveCashRoot(new Uint8Array(65))).toThrow(RangeError)

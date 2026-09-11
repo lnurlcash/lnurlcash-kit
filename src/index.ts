@@ -68,6 +68,7 @@ export {
 export {
   deriveCashRoot,
   deriveCashChild,
+  deriveCashMaster,
   deriveCashDomainNode,
   deriveCashSecret,
   cashDomainIndices,

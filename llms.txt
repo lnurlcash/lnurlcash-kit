@@ -64,6 +64,7 @@ deriveNoteSecretKey(p, chainCode, i) -> sk negates p first when P has odd y
 signNoteOwnership(sk) -> 65 bytes          RFC6979 over fixed "LNURLcash"
 recoverNoteOwnershipPubkey(sig) -> pk | null
 verifyNoteSignature also takes a ck1 as k1 and a cs1 as the signature
+deriveCashMaster(seed) -> CashNode   the BIP-32 master, for walking a path the kit does not name
 deriveNostrCashSeed(secretKey) -> 32-byte seed   HMAC-SHA256(key, "LNURLcash/nostr-seed")
 deriveNostrAddressNode(secretKey, host) -> CashNode   the address path from that seed;
   a branch for a holder with no BIP-39 words (heartwood-esp32 derives the same)
