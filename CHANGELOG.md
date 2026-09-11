@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-09-11
 
 **LUD-25 Part 2 building blocks.** Notes keyed by a public key and spent by a
 recoverable signature. The wire calls come next; this is the part every one of
